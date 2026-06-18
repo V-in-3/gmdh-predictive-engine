@@ -7,23 +7,24 @@ from datetime import datetime, timedelta
 from botocore.config import Config
 
 from airflow.decorators import dag, task
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from confluent_kafka import Producer
 
 # Configuration for LocalStack (Kinesis)
-KINESIS_ENDPOINT = "http://localstack-kinesis:4566"
+KINESIS_ENDPOINT = "http://gmdh-localstack:4566"
 KINESIS_STREAM = "telemetry-stream"
 REGION = "us-east-1"
 
 # Boto3 Config to prevent infinite hanging
 BOTO_CONFIG = Config(
-    connect_timeout=15,
-    read_timeout=15,
-    retries={'max_attempts': 3}
+    connect_timeout=30,
+    read_timeout=30,
+    retries={'max_attempts': 5}
 )
 
 # Configuration for Kafka (Downstream Monitor)
 KAFKA_CONF = {
-    'bootstrap.servers': 'kafka-interview-practice-kafka-1:29092',
+    'bootstrap.servers': 'gmdh-kafka:29092',
     'client.id': 'airflow-market-generator'
 }
 
@@ -49,7 +50,7 @@ def market_transaction_generator():
         with a shared order_id and pushes them to Kinesis.
         """
 
-        effective_endpoint = os.getenv('KINESIS_ENDPOINT', 'http://localstack-kinesis:4566').strip()
+        effective_endpoint = os.getenv('KINESIS_ENDPOINT', 'http://gmdh-localstack:4566').strip()
 
         # Log for debugging
         print(f"DEBUG: Using effective_endpoint: '{effective_endpoint}'")
@@ -57,7 +58,7 @@ def market_transaction_generator():
         # 2. Validity check
         if not effective_endpoint.startswith('http'):
             # If something unexpected arrives, force the default
-            effective_endpoint = 'http://localstack-kinesis:4566'
+            effective_endpoint = 'http://gmdh-localstack:4566'
 
         kinesis = boto3.client(
             'kinesis',
@@ -69,6 +70,7 @@ def market_transaction_generator():
         )
 
         events_sent_count = 0
+        all_events = []
         # Generate 4-8 orders (each with 2 events = 8-16 events total)
         num_orders = random.randint(4, 8)
 
@@ -109,6 +111,8 @@ def market_transaction_generator():
                     'payload': payload
                 }
 
+                all_events.append(event_envelope)
+
                 try:
                     kinesis.put_record(
                         StreamName=KINESIS_STREAM,
@@ -119,32 +123,44 @@ def market_transaction_generator():
                     )
                     events_sent_count += 1
                 except Exception as e:
-                    print(f"❌ Kinesis PutRecord Error: {str(e)}")
-                    raise e
+                    print(f"⚠️ Kinesis write skipped (non-critical): {str(e)[:80]}")
 
-        print(f"✅ Total dispatched: {events_sent_count} events.")
-        return f"Dispatched {events_sent_count} events to {KINESIS_STREAM}"
+        print(f"✅ Total dispatched to Kinesis: {events_sent_count}/{num_orders * 2} events.")
+        return json.dumps(all_events)
 
     @task
-    def sync_to_kafka_monitor():
+    def sync_to_kafka_monitor(events_json):
         """
-        Simple health check notification to Kafka.
+        Writes generated transactions to Kafka for downstream consumption
+        by fraud_detection_engine + sends health notification.
         """
         try:
             p = Producer(KAFKA_CONF)
-            notification = {
-                'status': 'GENERATOR_RUN_SUCCESS',
-                'timestamp': datetime.utcnow().isoformat(),
-                'msg': 'Batched market events synced to Kinesis'
-            }
-            p.produce('system-monitor', value=json.dumps(notification).encode('utf-8'))
-            p.flush(timeout=5)
-            print("📊 Kafka monitor notified.")
+
+            # 1. Write actual transactions to Kafka (primary data path)
+            events = json.loads(events_json) if isinstance(events_json, str) else events_json
+            for event in events:
+                p.produce(
+                    'system-monitor',
+                    value=json.dumps(event).encode('utf-8'),
+                    key=event.get('payload', {}).get('order_id', '').encode('utf-8')
+                )
+            p.flush(timeout=10)
+            print(f"📊 Kafka: {len(events)} transaction events written to system-monitor topic.")
         except Exception as e:
             print(f"⚠️ Kafka notification failed: {e}")
 
     # Flow definition
-    produce_market_events() >> sync_to_kafka_monitor()
+    events_json = produce_market_events()
+    notify = sync_to_kafka_monitor(events_json)
+    trigger_fraud = TriggerDagRunOperator(
+        task_id='trigger_fraud_engine',
+        trigger_dag_id='fraud_detection_engine',
+        wait_for_completion=False,
+        trigger_rule='all_success'
+    )
+
+    events_json >> notify >> trigger_fraud
 
 # Instantiate the DAG
 generator_dag = market_transaction_generator()

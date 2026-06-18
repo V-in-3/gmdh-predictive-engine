@@ -42,7 +42,7 @@ def marketplace_audit():
     @task
     def consume_partition(partition_id: int, **context):
         run_id = context['run_id']
-        BOOTSTRAP_SERVERS = 'kafka-interview-practice-kafka-1:29092'
+        BOOTSTRAP_SERVERS = 'gmdh-kafka:29092'
 
         # Initialize consumer
         c = Consumer({
@@ -127,7 +127,7 @@ def marketplace_audit():
 
         # 1. Get High Watermark (maximum possible offset)
         c = Consumer({
-            'bootstrap.servers': 'kafka-interview-practice-kafka-1:29092',
+            'bootstrap.servers': 'gmdh-kafka:29092',
             'group.id': f'audit-checker-{datetime.now().timestamp()}'
         })
 

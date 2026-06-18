@@ -5,7 +5,7 @@ from datetime import datetime
 import time
 
 # Configuration (using internal Kafka network port)
-BOOTSTRAP_SERVERS = 'kafka-interview-practice-kafka-1:29092'
+BOOTSTRAP_SERVERS = 'gmdh-kafka:29092'
 TOPIC = "raw-subscriptions"
 MYSQL_CONN_ID = 'mysql_default'
 

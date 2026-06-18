@@ -26,7 +26,7 @@ def kafka_event_generator():
         """Generates a random number of events of various types"""
 
         p = Producer({
-            'bootstrap.servers': 'kafka-interview-practice-kafka-1:29092',
+            'bootstrap.servers': 'gmdh-kafka:29092',
             'client.id': 'airflow-random-generator',
             'acks': 'all'
         })

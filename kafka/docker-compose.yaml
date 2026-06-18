@@ -2,7 +2,7 @@ version: '3.8'
 services:
   kafka:
     image: confluentinc/cp-kafka:7.6.0
-    container_name: kafka-interview-practice-kafka-1
+    container_name: gmdh-kafka
     ports:
       - "9092:9092"
       - "29092:29092"
@@ -14,7 +14,7 @@ services:
       KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_DOCKER://0.0.0.0:29092'
       KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
       KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
-      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://localhost:9092,PLAINTEXT_DOCKER://kafka-interview-practice-kafka-1:29092'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://localhost:9092,PLAINTEXT_DOCKER://gmdh-kafka:29092'
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
@@ -25,4 +25,4 @@ services:
 
 networks:
   kafka_net:
-    name: kafka-interview-practice_default
+    name: gmdh_net
