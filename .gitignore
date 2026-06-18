@@ -1,0 +1,27 @@
+# Secrets & Config
+gmdh_secrets.json
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv_cache/
+shared/cogent_venv/
+
+# Airflow
+airflow.db
+webserver_config.py
+logs/
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
+*.tmp

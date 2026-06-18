@@ -1,0 +1,63 @@
+version: '3.8'
+services:
+  airflow:
+    build: .
+    image: custom-airflow-reconciliation:latest #
+    container_name: airflow_reconciliation
+    user: "${AIRFLOW_UID:-501}:0"
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/opt/airflow/project
+      - ./dags:/opt/airflow/dags
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+#      host.docker.internal => ipconfig getifaddr en0
+#      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=mysql+mysqldb://airflow_user:airflow_pass@192.168.0.108:3306/airflow_db
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=mysql+mysqldb://airflow_user:airflow_pass@host.docker.internal:3306/airflow_db
+      - KINESIS_ENDPOINT=http://localstack_kinesis:4566
+      - REGION=us-east-1
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE=1800
+      - AIRFLOW__CORE__DAG_CONCURRENCY=2
+      - AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG=1
+      - AIRFLOW__WEBSERVER__WORKER_TIMEOUT=120
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE=60
+      - PYTHONPATH=/opt/airflow/project
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: standalone
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+    networks:
+      - kafka_net
+
+  localstack:
+    image: localstack/localstack:2.3.2
+    container_name: localstack-kinesis
+    ports:
+      - "4566:4566"
+    entrypoint: >
+      bash -c "mkdir -p /usr/local/bin && 
+      echo '#!/bin/bash' > /usr/local/bin/npm && 
+      echo 'exit 0' >> /usr/local/bin/npm && 
+      chmod +x /usr/local/bin/npm && 
+      /usr/local/bin/docker-entrypoint.sh"
+    environment:
+      - SERVICES=kinesis,s3
+      - DEFAULT_REGION=us-east-1
+      - KINESIS_PROVIDER=kinesis-mock
+      - KINESIS_INITIALIZE_STREAMS=telemetry-stream:1
+      - SKIP_INFRA_DOWNLOADS=1
+      - DEBUG=1
+    networks:
+      - kafka_net
+
+networks:
+  kafka_net:
+      name: kafka-interview-practice_default
+      external: true

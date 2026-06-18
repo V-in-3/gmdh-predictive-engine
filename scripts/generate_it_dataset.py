@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import uuid
 
-def generate_ancestry_it_dataset(records=10000):
+def generate_it_dataset(records=10000):
     rng = np.random.default_rng(seed=42)
 
     customer_ids = [str(uuid.uuid4()) for _ in range(3000)]
@@ -37,8 +37,8 @@ def generate_ancestry_it_dataset(records=10000):
 
     return df
 
-df_final = generate_ancestry_it_dataset()
+df_final = generate_it_dataset()
 df_final.to_csv('fintech_transactions_raw.csv', index=False)
 
-print(f"✅ Dataset for Ancestry IT generated: {len(df_final)} records.")
+print(f"✅ Dataset for IT generated: {len(df_final)} records.")
 print("Columns: order_id, customer_id, amazon_api_latency, cs_auth_status, system_cpu_load, architecture_efficiency")
