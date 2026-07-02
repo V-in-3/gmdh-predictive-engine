@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gmdh.fullname" . }}-airflow
+  labels:
+    {{- include "gmdh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: airflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: airflow
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: airflow
+    spec:
+      containers:
+        - name: airflow
+          image: {{ .Values.airflow.image }}
+          ports:
+            - containerPort: {{ .Values.airflow.webserverPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "gmdh.fullname" . }}-config
+          env:
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              value: "mysql+mysqldb://{{ .Values.mysql.user }}:{{ .Values.mysql.password }}@{{ include "gmdh.fullname" . }}-mysql:3306/{{ .Values.mysql.database }}"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.airflow.webserverPort }}
+            initialDelaySeconds: 60
+            periodSeconds: 30

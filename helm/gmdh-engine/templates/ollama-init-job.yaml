@@ -1,0 +1,25 @@
+{{- if .Values.ollama.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "gmdh.fullname" . }}-ollama-init
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  template:
+    spec:
+      containers:
+        - name: pull-model
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              until curl -sf http://{{ include "gmdh.fullname" . }}-ollama:11434/api/tags; do sleep 5; done
+              curl -sf http://{{ include "gmdh.fullname" . }}-ollama:11434/api/pull -d '{"name": "{{ .Values.ollama.model }}"}'
+              echo "{{ .Values.ollama.model }} ready"
+      restartPolicy: Never
+  backoffLimit: 3
+{{- end }}

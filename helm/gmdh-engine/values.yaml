@@ -1,0 +1,50 @@
+# Scoring engine configuration
+scoring:
+  # Available: bedrock_mock, ollama
+  featureEngine: bedrock_mock
+  # Available: bedrock_mock, gmdh, ollama
+  scoringEngine: gmdh
+
+# Ollama LLM
+ollama:
+  enabled: true
+  # Available: tinyllama, phi3:mini, mistral
+  model: tinyllama
+  image: ollama/ollama:latest
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "2"
+    limits:
+      memory: "6Gi"
+      cpu: "4"
+  storage: 10Gi
+
+# MySQL
+mysql:
+  image: mysql:8.0
+  rootPassword: root
+  database: airflow_db
+  user: airflow_user
+  password: airflow_pass
+  storage: 5Gi
+
+# Kafka
+kafka:
+  image: confluentinc/cp-kafka:7.6.0
+  storage: 5Gi
+  topics:
+    - name: raw-subscriptions
+      partitions: 3
+    - name: subscriptions_dlq
+      partitions: 1
+    - name: system-monitor
+      partitions: 1
+
+# Airflow
+airflow:
+  image: gmdh-airflow:latest
+  webserverPort: 8080
+  executor: LocalExecutor
+  adminUser: admin
+  adminPassword: admin

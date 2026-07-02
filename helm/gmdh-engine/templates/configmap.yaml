@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gmdh.fullname" . }}-config
+  labels:
+    {{- include "gmdh.labels" . | nindent 4 }}
+data:
+  FEATURE_ENGINE: {{ .Values.scoring.featureEngine | quote }}
+  SCORING_ENGINE: {{ .Values.scoring.scoringEngine | quote }}
+  OLLAMA_MODEL: {{ .Values.ollama.model | quote }}
+  AIRFLOW__CORE__EXECUTOR: {{ .Values.airflow.executor | quote }}
+  AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+  AIRFLOW__CORE__DAGS_FOLDER: "/opt/airflow/dags"
+  PYTHONPATH: "/opt/airflow/project"

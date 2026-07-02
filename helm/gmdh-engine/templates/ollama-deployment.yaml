@@ -1,0 +1,54 @@
+{{- if .Values.ollama.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gmdh.fullname" . }}-ollama
+  labels:
+    {{- include "gmdh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: ollama
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: {{ .Values.ollama.image }}
+          ports:
+            - containerPort: 11434
+          resources:
+            requests:
+              memory: {{ .Values.ollama.resources.requests.memory }}
+              cpu: {{ .Values.ollama.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.ollama.resources.limits.memory }}
+              cpu: {{ .Values.ollama.resources.limits.cpu | quote }}
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-data
+          persistentVolumeClaim:
+            claimName: {{ include "gmdh.fullname" . }}-ollama-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gmdh.fullname" . }}-ollama-pvc
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.ollama.storage }}
+{{- end }}
