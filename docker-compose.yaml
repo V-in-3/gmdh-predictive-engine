@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   mysql:
@@ -59,10 +58,13 @@ services:
     entrypoint: ['/bin/bash', '-c']
     command: |
       "
-      kafka-topics --bootstrap-server gmdh-kafka:9092 --create --if-not-exists --topic raw-subscriptions --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server gmdh-kafka:9092 --create --if-not-exists --topic subscriptions_dlq --partitions 1 --replication-factor 1
-      kafka-topics --bootstrap-server gmdh-kafka:9092 --create --if-not-exists --topic system-monitor --partitions 1 --replication-factor 1
-      echo 'Topics created successfully'
+      echo 'Waiting for Kafka to be fully ready...'
+      sleep 15
+      kafka-topics --bootstrap-server gmdh-kafka:29092 --create --if-not-exists --topic raw-subscriptions --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server gmdh-kafka:29092 --alter --topic raw-subscriptions --partitions 3 2>/dev/null
+      kafka-topics --bootstrap-server gmdh-kafka:29092 --create --if-not-exists --topic subscriptions_dlq --partitions 1 --replication-factor 1
+      kafka-topics --bootstrap-server gmdh-kafka:29092 --create --if-not-exists --topic system-monitor --partitions 1 --replication-factor 1
+      echo 'Topics created/verified successfully'
       "
     networks:
       - gmdh_net
@@ -86,6 +88,35 @@ services:
     networks:
       - gmdh_net
 
+  gmdh-ollama:
+    image: ollama/ollama:latest
+    container_name: gmdh-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - gmdh_net
+
+  ollama-init:
+    image: curlimages/curl:latest
+    container_name: gmdh-ollama-init
+    depends_on:
+      gmdh-ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-tinyllama}
+    entrypoint: >
+      sh -c "curl -sf http://gmdh-ollama:11434/api/pull -d \"{\\\"name\\\": \\\"$$OLLAMA_MODEL\\\"}\" > /dev/null && echo \"$$OLLAMA_MODEL ready\""
+    restart: "no"
+    networks:
+      - gmdh_net
+
   airflow:
     build: .
     container_name: gmdh-airflow
@@ -105,7 +136,19 @@ services:
       - KINESIS_ENDPOINT=http://gmdh-localstack:4566
       - REGION=us-east-1
       - PYTHONPATH=/opt/airflow/project
-    command: standalone
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=admin
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-tinyllama}
+    command: >-
+      bash -c "
+      airflow standalone &
+      sleep 30 &&
+      airflow users reset-password --username admin --password admin 2>/dev/null;
+      airflow connections delete mysql_default 2>/dev/null;
+      airflow connections add mysql_default --conn-type mysql --conn-host gmdh-mysql --conn-port 3306 --conn-login airflow_user --conn-password airflow_pass --conn-schema airflow_db 2>/dev/null;
+      python -c \"import MySQLdb; c=MySQLdb.connect(host='gmdh-mysql',user='airflow_user',passwd='airflow_pass',db='airflow_db'); cur=c.cursor(); cur.execute('CREATE TABLE IF NOT EXISTS raw_subscriptions (id INT AUTO_INCREMENT PRIMARY KEY, kafka_offset BIGINT UNIQUE, payload JSON, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)'); cur.execute('CREATE TABLE IF NOT EXISTS subscriptions_dlq (id INT AUTO_INCREMENT PRIMARY KEY, kafka_offset BIGINT UNIQUE, payload JSON, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)'); c.commit(); print('Tables ready')\" 2>/dev/null;
+      wait
+      "
     depends_on:
       mysql:
         condition: service_healthy
@@ -124,6 +167,7 @@ services:
 volumes:
   mysql_data:
   kafka_data:
+  ollama_data:
 
 networks:
   gmdh_net:

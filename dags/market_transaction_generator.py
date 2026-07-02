@@ -17,8 +17,8 @@ REGION = "us-east-1"
 
 # Boto3 Config to prevent infinite hanging
 BOTO_CONFIG = Config(
-    connect_timeout=30,
-    read_timeout=30,
+    connect_timeout=60,
+    read_timeout=60,
     retries={'max_attempts': 5}
 )
 
