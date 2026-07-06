@@ -1,0 +1,8 @@
+{
+  "description": "simple_rule_based_fraud_model",
+  "weights": {
+    "semantic_risk": 0.5,
+    "proxy_score": 0.3,
+    "velocity_1h": 0.2
+  }
+}

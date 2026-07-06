@@ -65,6 +65,35 @@ def fraud_detection_engine():
         return f"Model B trained. health_score={health['health_score']:.4f}, status={health['status']}"
 
     @task
+    def run_benchmark_evaluation():
+        """Run benchmark evaluation on the production-like dataset and persist metrics."""
+        import os
+
+        from scripts.benchmark_eval import evaluate_benchmark_model
+
+        benchmark_path = os.environ.get('BENCHMARK_DATASET_PATH', f'{DATA_DIR}/fraud_production_50k.csv')
+        output_path = os.environ.get('BENCHMARK_OUTPUT_PATH', f'{DATA_DIR}/benchmark_normalized.csv')
+        model_output_path = os.environ.get('BENCHMARK_MODEL_OUTPUT_PATH', f'{DATA_DIR}/benchmark_model.json')
+        metrics_output_path = os.environ.get('BENCHMARK_METRICS_OUTPUT_PATH', f'{DATA_DIR}/benchmark_metrics.json')
+
+        if not os.path.exists(benchmark_path):
+            print(f"Benchmark dataset not found: {benchmark_path}. Skipping benchmark evaluation.")
+            return f"Skipped benchmark evaluation: {benchmark_path}"
+
+        result = evaluate_benchmark_model(
+            input_path=benchmark_path,
+            output_path=output_path,
+            model_output_path=model_output_path,
+            metrics_output_path=metrics_output_path,
+        )
+        print(json.dumps(result, indent=2))
+        return (
+            f"Benchmark finished. rows={result['rows']}, "
+            f"auc_roc={result['metrics']['auc_roc']:.4f}, "
+            f"f1={result['metrics']['f1']:.4f}"
+        )
+
+    @task
     def check_system_health():
         """
         Read Model B health score.
@@ -181,12 +210,13 @@ def fraud_detection_engine():
     enrichment = enrich_with_bedrock()
     model_a = train_fraud_model()
     model_b = train_health_model()
+    benchmark = run_benchmark_evaluation()
     health = check_system_health()
     inference = run_fraud_inference(health)
     comparison = compare_engines(health)
     clean = cleanup()
 
-    enrichment >> [model_a, model_b] >> health >> [inference, comparison] >> clean
+    enrichment >> [model_a, model_b, benchmark] >> health >> [inference, comparison] >> clean
 
 
 fraud_detection_engine()
