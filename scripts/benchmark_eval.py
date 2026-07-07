@@ -143,15 +143,44 @@ def evaluate_benchmark_model(
 
     logging.info("normalizing rows")
 
-    # Simple rule-based model: combine proxy, semantic, and velocity to produce risk scores.
+    # Try to load the trained GMDH model coefficients.
+    # If found  -> score using the real polynomial (beta0 + betas * features).
+    # If missing -> fall back to fixed rule-based weights and log a warning so the
+    #               operator knows the benchmark is not reflecting the trained model.
+    _script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    gmdh_model_path = os.path.join(_script_dir, "data", "fraud_model_coeffs.json")
+    gmdh_model = None
+    if os.path.exists(gmdh_model_path):
+        with open(gmdh_model_path, "r", encoding="utf-8") as _fh:
+            gmdh_model = json.load(_fh)
+        logging.info("scoring with trained GMDH model from %s", gmdh_model_path)
+    else:
+        logging.warning(
+            "Trained GMDH model not found at %s — using rule-based fallback weights. "
+            "Run train_fraud_model task first to enable GMDH-based benchmark scoring.",
+            gmdh_model_path,
+        )
+
     scores = []
     labels = []
     for row in normalized_rows:
-        score = (
-            0.5 * row["semantic_risk"]
-            + 0.3 * row["proxy_score"]
-            + 0.2 * min(1.0, row["velocity_1h"] / 20.0)
-        )
+        if gmdh_model:
+            features = [
+                row["semantic_risk"],
+                row["velocity_1h"],
+                row["proxy_score"],
+                row["amount_deviation"],
+            ]
+            score = gmdh_model["beta0"] + sum(
+                b * x for b, x in zip(gmdh_model["betas"], features)
+            )
+            score = max(0.0, min(1.0, score))
+        else:
+            score = (
+                0.5 * row["semantic_risk"]
+                + 0.3 * row["proxy_score"]
+                + 0.2 * min(1.0, row["velocity_1h"] / 20.0)
+            )
         scores.append(score)
         labels.append(row["is_fraud"])
 
@@ -166,14 +195,22 @@ def evaluate_benchmark_model(
         metrics.get("auc_roc", 0.0),
     )
 
-    model_payload = {
-        "description": "simple_rule_based_fraud_model",
-        "weights": {
-            "semantic_risk": 0.5,
-            "proxy_score": 0.3,
-            "velocity_1h": 0.2,
-        },
-    }
+    if gmdh_model:
+        model_payload = {
+            "description": "gmdh_trained_fraud_model",
+            "source": gmdh_model_path,
+            "beta0": gmdh_model.get("beta0"),
+            "betas": gmdh_model.get("betas"),
+        }
+    else:
+        model_payload = {
+            "description": "simple_rule_based_fraud_model",
+            "weights": {
+                "semantic_risk": 0.5,
+                "proxy_score": 0.3,
+                "velocity_1h": 0.2,
+            },
+        }
 
     logging.info("writing outputs")
     model_output = Path(model_output_path or os.path.join("data", "benchmark_model.json"))
