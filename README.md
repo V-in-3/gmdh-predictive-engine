@@ -1,8 +1,32 @@
-# GMDH Predictive Engine — Adaptive Fraud & Infrastructure Intelligence
+# GMDH Predictive Engine — Anti-Fraud + System Health Benchmark Workflow
 
-A **self-learning monitoring and predictive system** for cloud architecture efficiency. The project demonstrates an end-to-end MLOps pipeline — from synthetic data generation and model training to real-time simulation and automated resource cleanup — orchestrated entirely by Apache Airflow.
+This repository implements a practical anti-fraud + system-health use case. The flow uses semantic signals from Bedrock/Ollama to enrich transaction data, but the final decision is constrained by a predictive GMDH model and by the current system-health state. In other words, the predictive model acts as a guardrail: it limits or suppresses downstream fraud decisions when the health signal is weak or the semantic evidence is unreliable.
 
-> **Core idea:** A self-learning platform where GMDH polynomial acts as a mathematical leash on LLM (Bedrock / Ollama) — the model automatically reduces trust in unreliable AI signals through coefficient evolution, while gating all business decisions on verified system health.
+The benchmark workflow is included so the same pipeline can be evaluated against a real-ish benchmark dataset, not only synthetic data. The goal is to validate the end-to-end flow: normalize data, score rows, compute metrics, and write outputs for comparison.
+
+### What this case covers
+- Anti-fraud scoring on transaction-like data
+- System-health monitoring as a separate signal
+- Predictive gating of Bedrock/Ollama-driven decisions
+- Benchmark-based validation with metrics such as precision, recall, F1, and AUC-ROC
+
+### Benchmark workflow
+Use the benchmark runner to validate the flow:
+
+```powershell
+& "C:/Users/User/AppData/Roaming/uv/python/cpython-3.14.6-windows-x86_64-none/python.exe" scripts/benchmark_eval.py data/fraud_production_50k.csv --output_path data/benchmark_normalized.csv --model_output_path data/benchmark_model.json --metrics_output_path data/benchmark_metrics.json
+```
+
+For model comparison:
+
+```powershell
+& "C:/Users/User/AppData/Roaming/uv/python/cpython-3.14.6-windows-x86_64-none/python.exe" scripts/compare_benchmark_models.py data/fraud_production_50k.csv --output_path data/benchmark_model_comparison.json
+```
+
+### Working rules
+- Before any code change, you must confirm with me first.
+- I will not make code changes, commits, pushes, or PRs unless you explicitly confirm.
+- If a change is large or risky, I will summarize the intent and expected impact before applying it.
 
 ---
 

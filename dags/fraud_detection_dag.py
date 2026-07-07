@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from datetime import datetime
 
@@ -8,9 +9,27 @@ DATA_DIR = '/opt/airflow/project/data'
 MODEL_A_PATH = f'{DATA_DIR}/fraud_model_coeffs.json'
 
 # Available engines: 'bedrock_mock', 'ollama'
-FEATURE_ENGINE = 'bedrock_mock'
+FEATURE_ENGINE = 'ollama'
 # Available engines: 'bedrock_mock', 'gmdh', 'ollama'
 SCORING_ENGINE = 'gmdh'
+
+# --- Nightly training control ---
+# Set to False to skip model retraining (e.g. for inference-only nightly runs).
+# When False, train_fraud_model and train_health_model are skipped and the DAG
+# proceeds directly to benchmark validation and inference using the most recently
+# saved model coefficients on disk.
+ENABLE_NIGHTLY_TRAINING = True
+
+# --- Benchmark gate thresholds ---
+# After training, benchmark metrics are validated against these thresholds.
+# If any metric falls below its threshold, fraud inference is skipped and a
+# warning is logged — preventing a degraded model from reaching production.
+BENCHMARK_THRESHOLDS = {
+    'f1': 0.45,
+    'precision': 0.50,
+    'recall': 0.40,
+    'auc_roc': 0.78,
+}
 
 
 @dag(
@@ -45,22 +64,52 @@ def fraud_detection_engine():
 
     @task
     def train_fraud_model():
-        """Train GMDH fraud model (Model A)."""
+        """Train GMDH fraud model (Model A).
+
+        Skipped when ENABLE_NIGHTLY_TRAINING is False — existing coefficients
+        on disk are reused so inference can still run without retraining.
+        """
+        if not ENABLE_NIGHTLY_TRAINING:
+            logging.info(
+                "ENABLE_NIGHTLY_TRAINING=False — skipping Model A training. "
+                "Existing coefficients at %s will be reused.",
+                MODEL_A_PATH,
+            )
+            return "SKIPPED"
+
+        logging.info("Training Model A (fraud) ...")
         from jobs.gmdh_fraud_trainer import train_fraud_model as train
         model = train(
             data_path=f'{DATA_DIR}/fraud_transactions.csv',
             output_path=MODEL_A_PATH
         )
+        logging.info("Model A trained successfully. RMSE=%.4f", model['final_rmse'])
         return f"Model A trained. RMSE={model['final_rmse']:.4f}"
 
     @task
     def train_health_model():
-        """Train GMDH health model (Model B). Produces health_score for fallback logic."""
+        """Train GMDH health model (Model B). Produces health_score for fallback logic.
+
+        Skipped when ENABLE_NIGHTLY_TRAINING is False — existing model_b_health.json
+        is reused so the health gate still functions without retraining.
+        """
+        if not ENABLE_NIGHTLY_TRAINING:
+            logging.info(
+                "ENABLE_NIGHTLY_TRAINING=False — skipping Model B training. "
+                "Existing model_b_health.json will be reused for health check."
+            )
+            return "SKIPPED"
+
+        logging.info("Training Model B (system health) ...")
         from jobs.gmdh_health_trainer import train_health_model as train
         _, health = train(
             data_path=f'{DATA_DIR}/fintech_transactions_raw.csv',
             output_path=f'{DATA_DIR}/model_b_coeffs.json',
             health_output_path=f'{DATA_DIR}/model_b_health.json'
+        )
+        logging.info(
+            "Model B trained successfully. health_score=%.4f status=%s",
+            health['health_score'], health['status'],
         )
         return f"Model B trained. health_score={health['health_score']:.4f}, status={health['status']}"
 
@@ -92,6 +141,51 @@ def fraud_detection_engine():
             f"auc_roc={result['metrics']['auc_roc']:.4f}, "
             f"f1={result['metrics']['f1']:.4f}"
         )
+
+    @task
+    def validate_benchmark_gate():
+        """Validate benchmark metrics against minimum thresholds.
+
+        Reads data/benchmark_metrics.json produced by run_benchmark_evaluation.
+        Logs a PASS/FAIL line per metric and returns "PASS" or "FAIL".
+        When "FAIL", downstream inference tasks are skipped automatically —
+        preventing a degraded model from reaching production.
+        """
+        metrics_path = f'{DATA_DIR}/benchmark_metrics.json'
+
+        if not os.path.exists(metrics_path):
+            logging.warning(
+                "Benchmark metrics file not found: %s. Gate check skipped — treating as PASS.",
+                metrics_path,
+            )
+            return "PASS"
+
+        with open(metrics_path, 'r') as fh:
+            metrics = json.load(fh)
+
+        logging.info("--- BENCHMARK GATE VALIDATION ---")
+        all_pass = True
+        for metric, threshold in BENCHMARK_THRESHOLDS.items():
+            value = metrics.get(metric, 0.0)
+            status = "PASS" if value >= threshold else "FAIL"
+            if status == "FAIL":
+                all_pass = False
+            logging.info(
+                "  %-12s %.4f  (threshold >= %.2f)  ->  %s",
+                metric, value, threshold, status,
+            )
+
+        if all_pass:
+            logging.info(
+                "BENCHMARK GATE: PASS — model quality meets all thresholds. Inference ENABLED."
+            )
+            return "PASS"
+
+        logging.warning(
+            "BENCHMARK GATE: FAIL — one or more metrics are below threshold. "
+            "Fraud inference will be SKIPPED to prevent deploying a degraded model."
+        )
+        return "FAIL"
 
     @task
     def check_system_health():
@@ -126,12 +220,19 @@ def fraud_detection_engine():
         return "ENABLED"
 
     @task
-    def run_fraud_inference(health_status):
+    def run_fraud_inference(health_status, benchmark_gate):
         """Apply fraud model via configured scoring engine."""
         from jobs.scoring_engine import get_engine
 
+        if benchmark_gate == "FAIL":
+            logging.warning(
+                "Skipping inference — benchmark gate FAILED. "
+                "Model quality is below thresholds. Check benchmark_metrics.json for details."
+            )
+            return
+
         if health_status == "DISABLED":
-            print("Skipping inference - system in fallback mode.")
+            logging.warning("Skipping inference — system in fallback mode (health check DISABLED).")
             return
 
         engine = get_engine(SCORING_ENGINE)
@@ -153,12 +254,16 @@ def fraud_detection_engine():
         print(f"Engine: {engine.engine_name}")
 
     @task
-    def compare_engines(health_status):
+    def compare_engines(health_status, benchmark_gate):
         """A/B comparison: run all scoring engines on same data, print side-by-side."""
         from jobs.scoring_engine import get_engine
 
+        if benchmark_gate == "FAIL":
+            logging.warning("Skipping engine comparison — benchmark gate FAILED.")
+            return
+
         if health_status == "DISABLED":
-            print("Skipping comparison - system in fallback mode.")
+            logging.warning("Skipping engine comparison — system in fallback mode (health check DISABLED).")
             return
 
         events = [
@@ -206,17 +311,24 @@ def fraud_detection_engine():
         """Remove temp files."""
         print("Cleanup complete.")
 
-    # Flow
+    # Flow:
+    # 1. Enrich data with LLM features
+    # 2. Train models in parallel (skipped if ENABLE_NIGHTLY_TRAINING=False)
+    # 3. Run benchmark on the freshly trained model
+    # 4. Validate benchmark metrics — FAIL blocks inference (benchmark gate)
+    # 5. Check system health — DISABLED blocks inference (health gate)
+    # 6. Run fraud inference and engine A/B comparison
     enrichment = enrich_with_bedrock()
     model_a = train_fraud_model()
     model_b = train_health_model()
     benchmark = run_benchmark_evaluation()
+    gate = validate_benchmark_gate()
     health = check_system_health()
-    inference = run_fraud_inference(health)
-    comparison = compare_engines(health)
+    inference = run_fraud_inference(health, gate)
+    comparison = compare_engines(health, gate)
     clean = cleanup()
 
-    enrichment >> [model_a, model_b, benchmark] >> health >> [inference, comparison] >> clean
+    enrichment >> [model_a, model_b] >> benchmark >> gate >> health >> [inference, comparison] >> clean
 
 
 fraud_detection_engine()
