@@ -35,8 +35,12 @@ BENCHMARK_THRESHOLDS = {
 @dag(
     default_args={'owner': 'airflow'},
     start_date=datetime(2026, 6, 18),
-    schedule_interval=None,
+    # Runs every night at 02:00 UTC.
+    # catchup=False ensures no historical runs are created after deployment.
+    # max_active_runs=1 prevents overlapping runs if a run takes longer than 24h.
+    schedule_interval='0 2 * * *',
     catchup=False,
+    max_active_runs=1,
     tags=['ml', 'fraud', 'gmdh', 'bedrock']
 )
 def fraud_detection_engine():
@@ -188,6 +192,74 @@ def fraud_detection_engine():
         return "FAIL"
 
     @task
+    def save_champion():
+        """Back up the current active model before retraining begins.
+
+        This is step 1 of the champion-challenger pattern.
+        The backup (fraud_model_coeffs_champion.json) is used by promote_or_restore
+        to roll back if the newly trained challenger fails the benchmark gate.
+        Runs in parallel with enrich_with_bedrock so it does not slow down the flow.
+        """
+        import shutil
+
+        champion_path = f'{DATA_DIR}/fraud_model_coeffs_champion.json'
+
+        if not os.path.exists(MODEL_A_PATH):
+            logging.info(
+                "No existing model found at %s — skipping champion backup. "
+                "This is expected on first-time training.",
+                MODEL_A_PATH,
+            )
+            return "NO_CHAMPION"
+
+        shutil.copy2(MODEL_A_PATH, champion_path)
+        logging.info(
+            "Champion model backed up: %s -> %s",
+            MODEL_A_PATH, champion_path,
+        )
+        return "SAVED"
+
+    @task
+    def promote_or_restore(gate_result):
+        """Promote challenger or restore champion based on benchmark gate result.
+
+        PASS  -> challenger (newly trained model) is promoted to active champion.
+                 The previous backup is kept at fraud_model_coeffs_champion.json
+                 as a reference for the next cycle.
+        FAIL  -> champion is restored from backup so inference uses the last
+                 known-good model instead of the degraded challenger.
+        """
+        import shutil
+
+        champion_path = f'{DATA_DIR}/fraud_model_coeffs_champion.json'
+
+        if gate_result == "PASS":
+            logging.info(
+                "CHAMPION-CHALLENGER: PASS — challenger promoted to champion. "
+                "Active model: %s",
+                MODEL_A_PATH,
+            )
+            return "PROMOTED"
+
+        # gate_result == "FAIL"
+        if not os.path.exists(champion_path):
+            logging.warning(
+                "CHAMPION-CHALLENGER: FAIL — benchmark gate failed but no champion "
+                "backup found at %s. Keeping current model as-is.",
+                champion_path,
+            )
+            return "NO_CHAMPION_TO_RESTORE"
+
+        shutil.copy2(champion_path, MODEL_A_PATH)
+        logging.warning(
+            "CHAMPION-CHALLENGER: FAIL — challenger failed benchmark gate. "
+            "Champion restored from %s to %s. "
+            "Inference will use the previous known-good model.",
+            champion_path, MODEL_A_PATH,
+        )
+        return "RESTORED"
+
+    @task
     def check_system_health():
         """
         Read Model B health score.
@@ -312,23 +384,27 @@ def fraud_detection_engine():
         print("Cleanup complete.")
 
     # Flow:
-    # 1. Enrich data with LLM features
+    # 1. Save current model as champion backup  ─┐ (parallel)
+    #    Enrich data with LLM features           ─┘
     # 2. Train models in parallel (skipped if ENABLE_NIGHTLY_TRAINING=False)
     # 3. Run benchmark on the freshly trained model
     # 4. Validate benchmark metrics — FAIL blocks inference (benchmark gate)
-    # 5. Check system health — DISABLED blocks inference (health gate)
-    # 6. Run fraud inference and engine A/B comparison
+    # 5. Promote challenger or restore champion based on gate result
+    # 6. Check system health — DISABLED blocks inference (health gate)
+    # 7. Run fraud inference and engine A/B comparison
+    save_champ = save_champion()
     enrichment = enrich_with_bedrock()
     model_a = train_fraud_model()
     model_b = train_health_model()
     benchmark = run_benchmark_evaluation()
     gate = validate_benchmark_gate()
+    promotion = promote_or_restore(gate)
     health = check_system_health()
     inference = run_fraud_inference(health, gate)
     comparison = compare_engines(health, gate)
     clean = cleanup()
 
-    enrichment >> [model_a, model_b] >> benchmark >> gate >> health >> [inference, comparison] >> clean
+    [save_champ, enrichment] >> [model_a, model_b] >> benchmark >> gate >> promotion >> health >> [inference, comparison] >> clean
 
 
 fraud_detection_engine()
