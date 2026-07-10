@@ -1,0 +1,15 @@
+{
+  "model": "GMDH Self-Organized (200K training, 500 candidates evaluated)",
+  "test_set": "IEEE-CIS 50K",
+  "precision": 0.5506607929394127,
+  "recall": 0.18422991893747806,
+  "f1": 0.2760905539429848,
+  "auc_roc": 0.6825251776849336,
+  "tp": 250,
+  "fp": 204,
+  "fn": 1107,
+  "tn": 48439,
+  "gate_status": "FAIL",
+  "train_mse": 0.024336018229865076,
+  "val_mse": 0.024560058170243967
+}

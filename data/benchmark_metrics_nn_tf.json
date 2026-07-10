@@ -1,0 +1,21 @@
+{
+  "model": "Neural Network TensorFlow v6",
+  "architecture": "512->256->128->64->32 + BatchNorm + Dropout",
+  "optimizer": "Adam + Cosine LR decay",
+  "loss": "BinaryFocalCrossentropy(gamma=2.0)",
+  "class_weight": 12.0,
+  "best_threshold": 0.7500000000000002,
+  "precision": 0.8017738359201774,
+  "recall": 0.5923984272608126,
+  "f1": 0.6813642359148294,
+  "auc_roc": 0.9288444258363008,
+  "tp": 1808,
+  "fp": 447,
+  "fn": 1244,
+  "tn": 86501,
+  "train_samples": 210000,
+  "val_samples": 90000,
+  "epochs_trained": 66,
+  "training_time_sec": 479.3980519771576,
+  "gate_pass": true
+}

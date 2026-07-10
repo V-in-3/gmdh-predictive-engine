@@ -1,0 +1,22 @@
+{
+  "algorithm": "Neural Network (TensorFlow)",
+  "version": 6,
+  "architecture": {
+    "input_dim": 432,
+    "hidden_dims": [
+      512,
+      256,
+      128,
+      64,
+      32
+    ]
+  },
+  "best_threshold": 0.7500000000000002,
+  "performance": {
+    "precision": 0.8017738359201774,
+    "recall": 0.5923984272608126,
+    "f1": 0.6813642359148294,
+    "auc_roc": 0.9288444258363008
+  },
+  "training_time_sec": 479.3980519771576
+}

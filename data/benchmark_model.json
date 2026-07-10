@@ -1,8 +1,10 @@
 {
-  "description": "simple_rule_based_fraud_model",
-  "weights": {
-    "semantic_risk": 0.5,
-    "proxy_score": 0.3,
-    "velocity_1h": 0.2
-  }
+  "description": "gmdh_trained_fraud_model",
+  "source": "c:\\Users\\User\\Documents\\gmdh-predictive-engine\\data\\fraud_model_coeffs.json",
+  "beta0": -0.009689705844712562,
+  "betas": [
+    0.8216057667849549,
+    0.6615707085936392,
+    -0.4264171385403655
+  ]
 }

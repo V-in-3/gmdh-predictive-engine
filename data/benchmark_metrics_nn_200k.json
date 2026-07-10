@@ -1,0 +1,30 @@
+{
+  "model": "Neural Network (NumPy)",
+  "dataset": "IEEE-CIS Fraud Detection (50K test)",
+  "timestamp": "2026-07-09 23:19:39.802705",
+  "predictions": {
+    "threshold": 0.8500000000000003,
+    "min": 0.002868059827225426,
+    "mean": 0.27575368713051573,
+    "max": 0.9999999992249666
+  },
+  "metrics": {
+    "precision": 0.294375,
+    "recall": 0.3470891672807664,
+    "f1": 0.3185661143050389,
+    "auc_roc": 0.8416851628813969
+  },
+  "confusion_matrix": {
+    "tp": 471,
+    "fp": 1129,
+    "tn": 47514,
+    "fn": 886
+  },
+  "gate": {
+    "f1_pass": false,
+    "precision_pass": false,
+    "recall_pass": false,
+    "auc_roc_pass": true,
+    "overall_pass": false
+  }
+}

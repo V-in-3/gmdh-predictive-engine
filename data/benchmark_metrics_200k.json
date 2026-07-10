@@ -1,0 +1,16 @@
+{
+  "dataset": "IEEE-CIS 50K test set",
+  "model": "200K training samples",
+  "model_file": "C:\\Users\\User\\Documents\\gmdh-predictive-engine\\data\\fraud_model_coeffs_200k.json",
+  "n_features": 432,
+  "n_layer1_nodes": 50,
+  "precision": 0.5697329376685539,
+  "recall": 0.14148857774398316,
+  "f1": 0.22668240531068753,
+  "auc_roc": 0.7534638807629636,
+  "tp": 192,
+  "fp": 145,
+  "fn": 1165,
+  "tn": 48498,
+  "gate_status": "FAIL"
+}

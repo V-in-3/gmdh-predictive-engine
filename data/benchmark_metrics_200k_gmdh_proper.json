@@ -1,0 +1,17 @@
+{
+  "model": "GMDH with Polynomial Form Search",
+  "candidates_evaluated": 1800,
+  "candidates_forms": "6 polynomial forms",
+  "nodes_selected": 50,
+  "test_set": "IEEE-CIS 50K",
+  "precision": 0.4754990925503539,
+  "recall": 0.193072955046477,
+  "f1": 0.2746331195790922,
+  "auc_roc": 0.679714829674113,
+  "tp": 262,
+  "fp": 289,
+  "fn": 1095,
+  "tn": 48354,
+  "gate_status": "FAIL",
+  "model_mse": 0.024551813213697125
+}
