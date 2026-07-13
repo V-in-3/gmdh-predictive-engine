@@ -1,19 +1,18 @@
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: gmdh-mysql
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: gmdh-postgres
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: airflow_db
-      MYSQL_USER: airflow_user
-      MYSQL_PASSWORD: airflow_pass
+      POSTGRES_DB: airflow_db
+      POSTGRES_USER: airflow_user
+      POSTGRES_PASSWORD: airflow_pass
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD-SHELL", "pg_isready -U airflow_user -d airflow_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -127,7 +126,7 @@ services:
       - ./dags:/opt/airflow/dags
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=mysql+mysqldb://airflow_user:airflow_pass@gmdh-mysql:3306/airflow_db
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow_user:airflow_pass@gmdh-postgres:5432/airflow_db
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
       - AIRFLOW__WEBSERVER__WORKER_TIMEOUT=120
@@ -139,18 +138,56 @@ services:
       - _AIRFLOW_WWW_USER_USERNAME=admin
       - _AIRFLOW_WWW_USER_PASSWORD=admin
       - OLLAMA_MODEL=${OLLAMA_MODEL:-tinyllama}
+      - SKIP_GATES=${SKIP_GATES:-false}
+      - POSTGRES_HOST=gmdh-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=airflow_db
+      - POSTGRES_USER=airflow_user
+      - POSTGRES_PASSWORD=airflow_pass
     command: >-
       bash -c "
+      pip install --quiet pgvector psycopg2-binary numpy 2>/dev/null;
       airflow standalone &
       sleep 30 &&
       airflow users reset-password --username admin --password admin 2>/dev/null;
-      airflow connections delete mysql_default 2>/dev/null;
-      airflow connections add mysql_default --conn-type mysql --conn-host gmdh-mysql --conn-port 3306 --conn-login airflow_user --conn-password airflow_pass --conn-schema airflow_db 2>/dev/null;
-      python -c \"import MySQLdb; c=MySQLdb.connect(host='gmdh-mysql',user='airflow_user',passwd='airflow_pass',db='airflow_db'); cur=c.cursor(); cur.execute('CREATE TABLE IF NOT EXISTS raw_subscriptions (id INT AUTO_INCREMENT PRIMARY KEY, kafka_offset BIGINT UNIQUE, payload JSON, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)'); cur.execute('CREATE TABLE IF NOT EXISTS subscriptions_dlq (id INT AUTO_INCREMENT PRIMARY KEY, kafka_offset BIGINT UNIQUE, payload JSON, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)'); c.commit(); print('Tables ready')\" 2>/dev/null;
+      airflow connections delete postgres_default 2>/dev/null;
+      airflow connections add postgres_default --conn-type postgres --conn-host gmdh-postgres --conn-port 5432 --conn-login airflow_user --conn-password airflow_pass --conn-schema airflow_db 2>/dev/null;
+      python -c \"
+      import psycopg2
+      conn = psycopg2.connect(host='gmdh-postgres', user='airflow_user', password='airflow_pass', dbname='airflow_db')
+      cur = conn.cursor()
+      cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
+      cur.execute('''CREATE TABLE IF NOT EXISTS raw_subscriptions (
+          id SERIAL PRIMARY KEY,
+          kafka_offset BIGINT UNIQUE,
+          payload JSONB,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )''')
+      cur.execute('''CREATE TABLE IF NOT EXISTS subscriptions_dlq (
+          id SERIAL PRIMARY KEY,
+          kafka_offset BIGINT UNIQUE,
+          payload JSONB,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )''')
+      cur.execute('''CREATE TABLE IF NOT EXISTS transaction_embeddings (
+          id SERIAL PRIMARY KEY,
+          transaction_id TEXT UNIQUE,
+          embedding vector(32),
+          fraud_score FLOAT,
+          is_fraud BOOLEAN,
+          metadata JSONB,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )''')
+      cur.execute('''CREATE INDEX IF NOT EXISTS idx_embeddings_ivfflat
+          ON transaction_embeddings USING ivfflat (embedding vector_cosine_ops)
+          WITH (lists = 100)''')
+      conn.commit()
+      print('PostgreSQL tables + pgvector ready')
+      \" 2>/dev/null;
       wait
       "
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
       kafka:
         condition: service_healthy
@@ -165,7 +202,7 @@ services:
       - gmdh_net
 
 volumes:
-  mysql_data:
+  postgres_data:
   kafka_data:
   ollama_data:
 

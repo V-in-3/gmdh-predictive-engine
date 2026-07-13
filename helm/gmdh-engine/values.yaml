@@ -20,14 +20,18 @@ ollama:
       cpu: "4"
   storage: 10Gi
 
-# MySQL
-mysql:
-  image: mysql:8.0
-  rootPassword: root
+# PostgreSQL + pgvector
+postgres:
+  image: pgvector/pgvector:pg16
   database: airflow_db
   user: airflow_user
   password: airflow_pass
   storage: 5Gi
+  pgvector:
+    enabled: true
+    embeddingDim: 32
+    indexType: ivfflat
+    indexLists: 100
 
 # Kafka
 kafka:

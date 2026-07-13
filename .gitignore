@@ -25,3 +25,16 @@ Thumbs.db
 # Temp
 /tmp/
 *.tmp
+
+#data
+data/final_fraud_dataset.csv
+data/fraud_ieee_200k.csv
+data/fraud_model_coeffs_200k_gmdh_proper.json
+data/fraud_model_coeffs_200k_gmdh.json
+data/fraud_model_coeffs_200k.json
+data/fraud_model_coeffs_ieee.json
+data/fraud_model_nn_200k.json
+data/fraud_production_50k_norm.csv
+data/fraud_transactions_ieee_50k.csv
+data/fraud_transactions_ieee_100k.csv
+data/fraud_transactions_ieee_full.csv

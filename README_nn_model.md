@@ -369,3 +369,171 @@ RESEARCH:     NumPy NN (kept as proof-of-concept, not deployed)
 | `data/fraud_model_nn_tf.keras` | Trained Keras model (deployable) |
 | `data/fraud_model_nn_tf.json` | Model metadata + performance |
 | `data/benchmark_metrics_nn_tf.json` | Full benchmark results |
+
+---
+
+## pgvector Integration — How NN Writes Embeddings
+
+### The Concept
+
+The neural network has a `Dense(32)` penultimate layer. The output of this layer is a **32-dimensional embedding** — a compressed representation of the transaction that captures fraud-relevant patterns.
+
+```
+Input (432 features)
+    │
+Dense(512) + BN + ReLU
+    │
+Dense(256) + BN + ReLU
+    │
+Dense(128) + BN + ReLU
+    │
+Dense(64)  + ReLU
+    │
+Dense(32)  + ReLU    ← THIS IS THE EMBEDDING (stored in pgvector)
+    │
+Dense(1)   + Sigmoid  ← This is the fraud score (0-1)
+```
+
+### How Embeddings Get Into pgvector
+
+**In the DAG (`fraud_detection_dag.py` → task `similarity_search`):**
+
+```python
+from jobs.vector_store import VectorStore
+
+store = VectorStore()  # connects to PostgreSQL (gmdh-postgres:5432)
+
+# For each transaction:
+store.store_embedding(
+    transaction_id="305-001",
+    embedding=nn_dense32_output,   # 32-dim numpy array
+    fraud_score=0.82,
+    is_fraud=True,
+    metadata={"semantic_risk": 0.85, "velocity_1h": 12}
+)
+```
+
+**In production (with real TensorFlow model):**
+
+```python
+import tensorflow as tf
+import numpy as np
+
+# Load trained model
+model = tf.keras.models.load_model('data/fraud_model_nn_tf.keras')
+
+# Create embedding extractor (output of Dense(32) layer)
+embedding_model = tf.keras.Model(
+    inputs=model.input,
+    outputs=model.layers[-2].output  # penultimate layer = Dense(32)
+)
+
+# Get embedding for a transaction
+features = np.array([[...432 features...]])
+embedding = embedding_model.predict(features)  # shape: (1, 32)
+fraud_score = model.predict(features)[0, 0]     # shape: scalar 0-1
+
+# Store in pgvector
+store.store_embedding(
+    transaction_id="305-001",
+    embedding=embedding[0],
+    fraud_score=float(fraud_score),
+    is_fraud=(fraud_score > 0.75)
+)
+```
+
+### How to Verify
+
+After running the DAG, check what's stored:
+
+```bash
+# Connect to PostgreSQL and see embeddings
+docker exec gmdh-postgres psql -U airflow_user -d airflow_db -c \
+  "SELECT transaction_id, fraud_score, is_fraud, created_at 
+   FROM transaction_embeddings ORDER BY created_at DESC LIMIT 10;"
+
+# Check embedding dimensions
+docker exec gmdh-postgres psql -U airflow_user -d airflow_db -c \
+  "SELECT transaction_id, vector_dims(embedding) as dims 
+   FROM transaction_embeddings LIMIT 3;"
+
+# Find similar transactions (cosine distance)
+docker exec gmdh-postgres psql -U airflow_user -d airflow_db -c \
+  "SELECT a.transaction_id, b.transaction_id as similar_to,
+          a.embedding <=> b.embedding as cosine_distance
+   FROM transaction_embeddings a, transaction_embeddings b
+   WHERE a.transaction_id != b.transaction_id
+   ORDER BY a.embedding <=> b.embedding LIMIT 5;"
+```
+
+**From Python (inside container):**
+
+```bash
+docker exec gmdh-airflow python -c "
+from jobs.vector_store import VectorStore
+import numpy as np
+
+store = VectorStore()
+print(f'Total embeddings: {store.count()}')
+
+# Find transactions similar to a high-fraud vector
+query = np.random.rand(32).astype('float32')
+results = store.find_similar(query, top_k=3)
+for r in results:
+    print(f'  {r[\"transaction_id\"]}: distance={r[\"distance\"]:.4f}, fraud={r[\"is_fraud\"]}')
+"
+```
+
+### Expected DAG Log Output
+
+When `similarity_search` task runs, you'll see in Airflow logs:
+
+```
+======================================================================
+SIMILARITY SEARCH (pgvector)
+======================================================================
+
+  Script: jobs/vector_store.py
+  Table:  transaction_embeddings
+  Index:  ivfflat (cosine distance)
+  Dim:    32 (from NN Dense(32) penultimate layer)
+
+----------------------------------------------------------------------
+  STEP 1: Generate embeddings (NN forward pass simulation)
+----------------------------------------------------------------------
+  Stored: 305-SIM-001 → embedding[32] → pgvector (fraud_score=0.609, is_fraud=True)
+  Stored: 305-SIM-002 → embedding[32] → pgvector (fraud_score=0.089, is_fraud=False)
+  Stored: 305-SIM-003 → embedding[32] → pgvector (fraud_score=0.389, is_fraud=False)
+
+----------------------------------------------------------------------
+  STEP 2: Similarity search (cosine nearest neighbors)
+----------------------------------------------------------------------
+
+  Transaction: 305-SIM-001
+    Verdict:        CONFIRMED_FRAUD
+    Confidence:     100%
+    Fraud neighbors: 1/1
+    Nearest fraud:  distance=0.0012
+
+  Transaction: 305-SIM-002
+    Verdict:        LIKELY_LEGIT
+    Confidence:     0%
+    Fraud neighbors: 0/2
+    Nearest legit:  distance=0.0008
+
+  Total embeddings in pgvector: 3
+
+----------------------------------------------------------------------
+  HOW TO VERIFY (run manually):
+----------------------------------------------------------------------
+  docker exec gmdh-postgres psql -U airflow_user -d airflow_db -c \
+    "SELECT transaction_id, fraud_score, is_fraud FROM transaction_embeddings ORDER BY created_at DESC LIMIT 10;"
+======================================================================
+```
+
+### What This Proves
+
+1. **NN embeddings are stored** — every scored transaction leaves a 32-dim fingerprint
+2. **Similarity search works** — cosine distance finds nearest historical cases
+3. **Case-based reasoning** — verdicts explain *why* based on precedents, not just model output
+4. **Drift detection ready** — if new embeddings are far from all stored ones, the data distribution has shifted

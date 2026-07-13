@@ -9,6 +9,12 @@ data:
   SCORING_ENGINE: {{ .Values.scoring.scoringEngine | quote }}
   OLLAMA_MODEL: {{ .Values.ollama.model | quote }}
   AIRFLOW__CORE__EXECUTOR: {{ .Values.airflow.executor | quote }}
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://{{ .Values.postgres.user }}:{{ .Values.postgres.password }}@{{ include "gmdh.fullname" . }}-postgres:5432/{{ .Values.postgres.database }}"
   AIRFLOW__CORE__LOAD_EXAMPLES: "False"
   AIRFLOW__CORE__DAGS_FOLDER: "/opt/airflow/dags"
   PYTHONPATH: "/opt/airflow/project"
+  POSTGRES_HOST: "{{ include "gmdh.fullname" . }}-postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: {{ .Values.postgres.database | quote }}
+  POSTGRES_USER: {{ .Values.postgres.user | quote }}
+  POSTGRES_PASSWORD: {{ .Values.postgres.password | quote }}
