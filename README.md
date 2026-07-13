@@ -36,7 +36,7 @@ This is a portfolio project that showcases:
 
 - **MLOps lifecycle** — data generation → training → model persistence → inference → cleanup
 - **Transparent ML** — GMDH produces an interpretable polynomial, not a black-box prediction
-- **Data pipeline engineering** — Kafka ingestion, MySQL sync, DLQ handling, recursive reconciliation
+- **Data pipeline engineering** — Kafka ingestion, PostgreSQL sync, DLQ handling, recursive reconciliation
 - **Infrastructure as Code** — fully Dockerized + Helm charts for Kubernetes deployment
 - **Production patterns** — idempotency, dead letter queues, self-healing DAGs, parallel processing
 - **Pluggable architecture** — scoring engine factory with A/B comparison (GMDH vs Ollama vs mock)
@@ -57,12 +57,12 @@ This is a portfolio project that showcases:
 │       │ writes subscription events to Kafka                         │
 │       ▼                                                             │
 │  kafka_lag_monitor (*/3 min)                                        │
-│       │ compares Kafka watermark vs MySQL count                     │
+│       │ compares Kafka watermark vs PostgreSQL count                  │
 │       │ gap > threshold? → triggers ↓                               │
 │       ▼                                                             │
 │  marketplace_audit (recursive, self-healing)                        │
-│       │ parallel consume (3 partitions) → MySQL                     │
-│       │ bad JSON → DLQ (Kafka + MySQL)                              │
+│       │ parallel consume (3 partitions) → PostgreSQL                  │
+│       │ bad JSON → DLQ (Kafka + PostgreSQL)                           │
 │       │ validates → gap still > 0? → triggers itself                │
 │       │                                                             │
 │  ─────┼──────────────────────────────────────────────────────────   │
@@ -75,7 +75,7 @@ This is a portfolio project that showcases:
 │       │ Ollama / Bedrock (mock) → semantic feature extraction       │
 │       │ Python GMDH → trains fraud model (Model A)                  │
 │       │                   + health model (Model B)                  │
-│       │ check_system_health() → queries MySQL sync state            │
+│       │ check_system_health() → queries PostgreSQL sync state          │
 │       │   └─ connects to data integrity layer                       │
 │       │   └─ if system degraded → DISABLE inference (fallback)      │
 │       ▼                                                             │
@@ -87,7 +87,7 @@ This is a portfolio project that showcases:
 
 The system monitors **3 levels of health** that feed into each other:
 
-1. **Data integrity** — guarantees zero data loss between Kafka and MySQL
+1. **Data integrity** — guarantees zero data loss between Kafka and PostgreSQL
 2. **Infrastructure efficiency** — ML model predicts system health from latency, auth status, and CPU load
 3. **Business logic (Fraud)** — ML model scores transactions, but only when infrastructure is healthy
 
@@ -101,7 +101,7 @@ The system monitors **3 levels of health** that feed into each other:
 | `kafka_lag_monitor` | detects gap > 5 | `marketplace_audit` | `trigger_dag()` |
 | `marketplace_audit` | gap still > 0 | `marketplace_audit` | Recursive self-trigger |
 | `market_transaction_generator` | after success | `fraud_detection_engine` | `TriggerDagRunOperator` |
-| `fraud_detection_engine` | health check task | reads `raw_subscriptions` | MySQL query (cross-DAG data dependency) |
+| `fraud_detection_engine` | health check task | reads `raw_subscriptions` | PostgreSQL query (cross-DAG data dependency) |
 
 ### Fraud Detection Engine (internal flow)
 
@@ -148,7 +148,7 @@ Transactions generated --> Fraud model trained --> Health checked -->
 
 ##  The GMDH Algorithm
 
-**GMDH (Group Method of Data Handling)** is a self-organizing approach to building polynomial models.
+**GMDH (Group Method of Data Handling)** is a self-organizing approach to building polynomial models, invented by Alexei Ivakhnenko (1968).
 
 ### Why GMDH instead of Neural Networks / XGBoost?
 
@@ -329,7 +329,7 @@ The `compare_engines` task always runs all 3 regardless of these settings, provi
 
 ##  Data Integrity Pipeline
 
-The audit system guarantees **zero data loss** between Kafka and MySQL:
+The audit system guarantees **zero data loss** between Kafka and PostgreSQL:
 
 ```
 kafka_lag_monitor (every 3 min)
@@ -340,7 +340,7 @@ kafka_lag_monitor (every 3 min)
                             │
                             ├─ parallel consume (3 partitions)
                             ├─ INSERT IGNORE (deduplication)
-                            ├─ bad JSON → DLQ (Kafka + MySQL)
+                            ├─ bad JSON → DLQ (Kafka + PostgreSQL)
                             │
                             └─ validate → gap still > 0?
                                     │           │
@@ -352,9 +352,64 @@ kafka_lag_monitor (every 3 min)
 
 Key patterns:
 - **Idempotent replay** — always scans from offset 0, `UNIQUE` constraint prevents duplicates
-- **Dual DLQ** — errors persist in both Kafka topic and MySQL table
+- **Dual DLQ** — errors persist in both Kafka topic and PostgreSQL table
 - **Self-healing** — recursive trigger until convergence
 - **Cross-DAG dependency** — `fraud_detection_engine` queries `raw_subscriptions` count to estimate system health
+
+---
+
+##  Embedding Similarity Search (pgvector)
+
+The system uses **pgvector** (PostgreSQL extension) to store 32-dimensional embeddings from the neural network's penultimate layer and provide case-based fraud explanation.
+
+### How It Works
+
+```
+Transaction → [NN Forward Pass] → Dense(32) output = embedding vector
+                                        │
+                    ┌───────────────────┼───────────────────┐
+                    ▼                   ▼                   ▼
+              Store in pgvector    Score (Sigmoid)    Find similar cases
+              (for future lookups)  → BLOCK/ALLOW     → "This looks like
+                                                        known fraud X, Y"
+```
+
+### What It Provides
+
+| Capability | Description |
+|------------|-------------|
+| **Case-based explanation** | "This transaction is 95% similar to 3 known fraud cases" |
+| **Drift detection** | If new transactions are far from all stored vectors → distribution shifted |
+| **Confidence boost** | Model says BLOCK + pgvector confirms similar fraud → high confidence |
+| **Human override** | Model says BLOCK but pgvector shows similar legitimate cases → REVIEW |
+
+### Verdicts (from `explain_decision`)
+
+| Verdict | Condition | Action |
+|---------|-----------|--------|
+| CONFIRMED_FRAUD | 80%+ of neighbors are fraud | Block with high confidence |
+| LIKELY_FRAUD | 50-80% neighbors are fraud | Block, log evidence |
+| UNCERTAIN | 30-50% neighbors are fraud | Send to manual review |
+| LIKELY_LEGIT | <30% neighbors are fraud | Allow, but model disagrees — investigate |
+
+### Table Schema
+
+```sql
+CREATE TABLE transaction_embeddings (
+    id SERIAL PRIMARY KEY,
+    transaction_id TEXT UNIQUE,
+    embedding vector(32),          -- pgvector type, 32 dimensions
+    fraud_score FLOAT,
+    is_fraud BOOLEAN,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- IVFFlat index for fast approximate nearest neighbor search
+CREATE INDEX idx_embeddings_ivfflat
+    ON transaction_embeddings USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+```
 
 ---
 
@@ -365,7 +420,7 @@ Key patterns:
 | Orchestration | Apache Airflow 2.10.5 (Python 3.11) | DAG scheduling, task dependencies, recursive triggers |
 | Processing | Apache Spark (Scala) + Python | GMDH model training (Scala for Spark, Python for containerized) |
 | Streaming | Apache Kafka (KRaft, Confluent 7.6.0) | Event ingestion, DLQ, system-monitor topic |
-| Storage | AWS S3 (via S3A) + MySQL 8.0 | Model artifacts, operational data |
+| Storage | AWS S3 (via S3A) + PostgreSQL 16 + pgvector | Model artifacts, operational data, embedding similarity search |
 | Cloud Emulation | LocalStack 2.3.2 | Kinesis & S3 for local development |
 | LLM Integration | Ollama (tinyllama/phi3/mistral) + Amazon Bedrock (mock) | Semantic feature extraction, direct fraud scoring |
 | Scoring Engines | Pluggable factory: GMDH, Bedrock Mock, Ollama | A/B comparison of scoring strategies |
@@ -384,11 +439,12 @@ gmdh-predictive-engine/
 │   ├── kafka_event_generator.py      # Produces random subscription events to Kafka
 │   ├── kafka_queue_monitor.py        # Lag detection → triggers audit if gap found
 │   ├── market_transaction_generator.py # SP-API + Cybersource → Kinesis → triggers fraud engine
-│   └── marketplace_audit.py          # Recursive Kafka→MySQL sync with DLQ
+│   └── marketplace_audit.py          # Recursive Kafka→PostgreSQL sync with DLQ
 ├── dags_backup/
 │   └── gmdh_predictive_engine_it.py  # Core ML DAG: Model B (train → simulate → cleanup)
 ├── jobs/
 │   ├── scoring_engine.py             # Unified engine factory (bedrock_mock / gmdh / ollama)
+│   ├── vector_store.py              # pgvector embedding store + similarity search
 │   ├── engines/
 │   │   ├── base.py                   # ScoringEngine abstract interface
 │   │   ├── bedrock_engine.py         # Deterministic hash-based mock (Bedrock)
@@ -404,7 +460,7 @@ gmdh-predictive-engine/
 │   └── gmdh-engine/                  # Kubernetes Helm chart
 │       ├── Chart.yaml
 │       ├── values.yaml               # Configurable: scoring engine, Ollama model, resources
-│       └── templates/                # Deployments: Airflow, Kafka, MySQL, Ollama
+│       └── templates/                # Deployments: Airflow, Kafka, PostgreSQL, Ollama
 ├── scripts/
 │   ├── generate_it_dataset.py        # Synthetic infra dataset (10K records)
 │   ├── generate_fraud_dataset.py     # Synthetic fraud dataset (5K records)
@@ -421,9 +477,9 @@ gmdh-predictive-engine/
 │   └── enriched_transaction.json     # Sample Bedrock-enriched events
 ├── kafka/
 │   └── docker-compose.yaml           # Kafka standalone config (reference)
-├── docker-compose.yaml               # ALL services: MySQL + Kafka + LocalStack + Ollama + Airflow
+├── docker-compose.yaml               # ALL services: PostgreSQL + Kafka + LocalStack + Ollama + Airflow
 ├── Dockerfile                        # Custom Airflow image (Python 3.11 + Kafka client)
-├── .env                              # Environment variables (OLLAMA_MODEL, MySQL creds)
+├── .env                              # Environment variables (OLLAMA_MODEL, PostgreSQL creds)
 └── .gitignore
 ```
 
@@ -438,7 +494,7 @@ gmdh-predictive-engine/
 
 #### Rancher Desktop: Memory Configuration
 
-The full stack (Airflow + Kafka + MySQL + Ollama + LocalStack) requires at least **8 GB RAM** allocated to the VM. Default 4 GB will cause Airflow webserver timeouts.
+The full stack (Airflow + Kafka + PostgreSQL + Ollama + LocalStack) requires at least **8 GB RAM** allocated to the VM. Default 4 GB will cause Airflow webserver timeouts.
 
 | Setting | Minimum | Recommended |
 |---------|---------|-------------|
@@ -459,13 +515,13 @@ docker-compose up -d
 ```
 
 This starts **all services** in one command:
-- MySQL 8.0 (Airflow metadata + operational data)
+- PostgreSQL 16 + pgvector (Airflow metadata + operational data + embeddings)
 - Kafka (KRaft mode, single-node)
 - LocalStack (S3 + Kinesis emulation)
 - Ollama LLM (tinyllama by default; configurable via `OLLAMA_MODEL` in `.env`)
 - Airflow (webserver + scheduler)
 
-Services start in dependency order: MySQL → Kafka → LocalStack → Ollama → Airflow.
+Services start in dependency order: PostgreSQL → Kafka → LocalStack → Ollama → Airflow.
 
 > **First startup takes ~60–90 seconds.** Airflow webserver needs time to parse DAGs and initialize. If `http://localhost:8080` is not available immediately, wait and retry.
 
@@ -604,7 +660,7 @@ kafka:
 | Resource | Template |
 |----------|----------|
 | Airflow (webserver + scheduler) | `airflow-deployment.yaml` |
-| MySQL 8.0 (StatefulSet) | `mysql-deployment.yaml` |
+| PostgreSQL 16 + pgvector | `postgres-deployment.yaml` |
 | Kafka (KRaft, StatefulSet) | `kafka-statefulset.yaml` |
 | Ollama LLM | `ollama-deployment.yaml` |
 | Ollama model pull (Job) | `ollama-init-job.yaml` |
