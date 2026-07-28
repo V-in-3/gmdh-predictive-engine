@@ -75,12 +75,18 @@ This is a portfolio project that showcases:
 │       │ Ollama / Bedrock (mock) → semantic feature extraction       │
 │       │ Python GMDH → trains fraud model (Model A)                  │
 │       │                   + health model (Model B)                  │
-│       │ check_system_health() → queries PostgreSQL sync state          │
+│       │ Benchmark gate (P≥0.50, R≥0.40, AUC≥0.78)                  │
+│       │ check_system_health() → queries PostgreSQL sync state       │
 │       │   └─ connects to data integrity layer                       │
 │       │   └─ if system degraded → DISABLE inference (fallback)      │
 │       ▼                                                             │
 │  fraud inference: GMDH / Ollama / mock → BLOCK / ALLOW              │
 │  compare_engines: A/B scoring across all 3 engines                  │
+│  similarity_search: pgvector cosine NN → case-based explanation     │
+│                                                                     │
+│  ═══════════════════════════════════════════════════════════════════ │
+│  REAL-TIME LAYER (standalone, not in Airflow):                      │
+│  LangGraph Agent: score → route → pgvector → LLM reason → decide   │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -106,31 +112,37 @@ The system monitors **3 levels of health** that feed into each other:
 ### Fraud Detection Engine (internal flow)
 
 ```
-enrich_with_bedrock (configurable: bedrock_mock | ollama)
-        |
-    +---+---+
-    |       |
-    v       v
-  train   train
-  Model A Model B
-  (fraud) (health)
-    |       |
-    +---+---+
-        |
-        v
-check_system_health  <-- reads model_b_health.json (produced by Model B)
-        |
-    +---+---+
-    |       |
-    v       v
-run_fraud     compare_engines   <-- A/B: runs all 3 engines on same data
-_inference        (gmdh vs bedrock_mock vs ollama)
-    |       |
-    +---+---+
-        |
-        v
-    cleanup
+save_champion_model ──┐
+                      ├──→ train_fraud_model (Model A, GMDH)  ─┐
+enrich_with_bedrock ──┘                                        │
+  (bedrock_mock | ollama)                                      ├──→ benchmark_validation
+                      ┌──→ train_health_model (Model B, GMDH) ─┘         │
+                      │                                                   ▼
+                      │                                          benchmark_gate
+                      │                                         (P≥0.50, R≥0.40,
+                      │                                          F1≥0.45, AUC≥0.78)
+                      │                                                   │
+                      │                                                   ▼
+                      │                                          promote_model
+                      │                                                   │
+                      │                                                   ▼
+                      └────────────────────────────────────→ check_system_health
+                                                                          │
+                                                           ┌──────────────┼──────────────┐
+                                                           ▼              ▼              ▼
+                                                   run_fraud_inference  compare_engines  similarity_search
+                                                   (GMDH polynomial)   (A/B: all 3)    (pgvector cosine NN)
+                                                           │              │              │
+                                                           └──────────────┼──────────────┘
+                                                                          ▼
+                                                                       cleanup
 ```
+
+**Scoring pipeline (per transaction):**
+- **Primary:** TensorFlow NN (if .keras available) → Precision 0.80, Recall 0.59, AUC 0.93
+- **Fallback:** GMDH polynomial (always available) → AUC 0.75, microsecond inference
+- **Similarity:** pgvector cosine search → case-based explanation + drift detection
+- **Real-time agent:** LangGraph (standalone) → adaptive routing based on confidence
 
 Model A and Model B train **in parallel**. Model B produces `health_score`.
 If `health_score < 0.45` then Model A inference is **disabled** (fallback mode).
@@ -413,17 +425,95 @@ CREATE INDEX idx_embeddings_ivfflat
 
 ---
 
+##  Fraud Investigation Agent (LangGraph)
+
+The project includes a **real-time fraud investigation agent** built with LangGraph — a state machine that routes each transaction through different analysis paths depending on model confidence.
+
+### How It Differs from Airflow DAG
+
+| | Airflow (batch) | LangGraph (real-time) |
+|---|---|---|
+| Trigger | Cron schedule (nightly) | Per transaction |
+| Purpose | Train model, benchmark, promote | Make BLOCK/ALLOW decision |
+| Flow | Fixed order, all steps execute | Adaptive — path depends on confidence |
+| LLM role | Feature extraction (before scoring) | Reasoning agent (after scoring) |
+| pgvector role | Store embeddings, log neighbors | **Influences decision** |
+
+### Agent State Machine
+
+```
+Transaction arrives
+        │
+        ▼
+   [score_node]
+   NN + GMDH scoring
+        │
+   ┌────┼────────────────┐
+   │    │                 │
+ >0.85  │  0.15–0.85    <0.15
+   │    │                 │
+   ▼    ▼                 ▼
+BLOCK  [search_similar]  ALLOW
+        pgvector lookup
+        │
+   ┌────┴────┐
+   │         │
+CONFIRMED  UNCERTAIN
+   │         │
+   ▼         ▼
+BLOCK   [llm_reason]
+         Ollama/Bedrock
+              │
+              ▼
+         [decide]
+       BLOCK / ALLOW / REVIEW
+```
+
+### Routing Logic
+
+| NN Score | Path | Steps | Latency |
+|----------|------|-------|---------|
+| > 0.85 | Fast block | score → decide | ~10ms |
+| < 0.15 | Fast allow | score → decide | ~10ms |
+| 0.15–0.85 | Investigate | score → pgvector → (LLM) → decide | ~100ms–5s |
+
+### Relationship to Airflow
+
+```
+Airflow (nightly):                    LangGraph (real-time):
+  train model ──────────────────────→ uses trained .keras model
+  benchmark gate ───────────────────→ only deploys if PASS
+  similarity_search (batch demo) ───→ same pgvector store
+  health_check ─────────────────────→ if unhealthy → agent disabled
+```
+
+### Run
+
+```bash
+pip install langgraph langchain-core
+python agents/fraud_investigation_agent.py
+```
+
+Works without LangGraph too (fallback mode with manual step-by-step execution).
+
+---
+
 ##  Technology Stack
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | Orchestration | Apache Airflow 2.10.5 (Python 3.11) | DAG scheduling, task dependencies, recursive triggers |
+| ML — Deep Learning | TensorFlow/Keras (Adam + Focal Loss + Cosine LR) | Primary fraud scorer (v6): Precision 0.80, Recall 0.59, AUC 0.93 |
+| ML — Polynomial | GMDH (self-organizing 2-layer polynomial) | Interpretable baseline, drift monitor, coefficient explainability |
+| ML — NumPy NN | Custom neural network (SGD, BatchNorm) | Research iterations v1-v5 (documented failures → design decisions) |
+| Vector Search | pgvector (PostgreSQL extension) | 32-dim embedding similarity search, drift detection, case-based explanation |
+| Agentic AI | LangGraph (state machine) + Ollama/Bedrock LLM | Fraud investigation agent: score → route → similarity → LLM reason → decide |
 | Processing | Apache Spark (Scala) + Python | GMDH model training (Scala for Spark, Python for containerized) |
 | Streaming | Apache Kafka (KRaft, Confluent 7.6.0) | Event ingestion, DLQ, system-monitor topic |
 | Storage | AWS S3 (via S3A) + PostgreSQL 16 + pgvector | Model artifacts, operational data, embedding similarity search |
 | Cloud Emulation | LocalStack 2.3.2 | Kinesis & S3 for local development |
 | LLM Integration | Ollama (tinyllama/phi3/mistral) + Amazon Bedrock (mock) | Semantic feature extraction, direct fraud scoring |
-| Scoring Engines | Pluggable factory: GMDH, Bedrock Mock, Ollama | A/B comparison of scoring strategies |
+| Scoring Engines | Pluggable factory: GMDH, Bedrock Mock, Ollama, NN (TensorFlow) | A/B comparison of scoring strategies |
 | Containerization | Docker Compose + Helm (Kubernetes) | Local dev (one command) + K8s-ready deployment |
 | Monitoring | New Relic APM (optional) | Background task tracing via decorators |
 | Code Quality | Pylint + AWS Athena | Historical score tracking |
@@ -434,8 +524,10 @@ CREATE INDEX idx_embeddings_ivfflat
 
 ```
 gmdh-predictive-engine/
+├── agents/
+│   └── fraud_investigation_agent.py  # LangGraph state machine: score → route → pgvector → LLM → decide
 ├── dags/
-│   ├── fraud_detection_dag.py        # Dual-model DAG: enrich → train → fallback → inference + A/B engine comparison
+│   ├── fraud_detection_dag.py        # Main DAG: enrich → train → benchmark → gate → inference + similarity_search
 │   ├── kafka_event_generator.py      # Produces random subscription events to Kafka
 │   ├── kafka_queue_monitor.py        # Lag detection → triggers audit if gap found
 │   ├── market_transaction_generator.py # SP-API + Cybersource → Kinesis → triggers fraud engine
@@ -444,7 +536,7 @@ gmdh-predictive-engine/
 │   └── gmdh_predictive_engine_it.py  # Core ML DAG: Model B (train → simulate → cleanup)
 ├── jobs/
 │   ├── scoring_engine.py             # Unified engine factory (bedrock_mock / gmdh / ollama)
-│   ├── vector_store.py              # pgvector embedding store + similarity search
+│   ├── vector_store.py               # pgvector embedding store + similarity search + explain_decision
 │   ├── engines/
 │   │   ├── base.py                   # ScoringEngine abstract interface
 │   │   ├── bedrock_engine.py         # Deterministic hash-based mock (Bedrock)
@@ -452,10 +544,14 @@ gmdh-predictive-engine/
 │   │   └── ollama_engine.py          # Live LLM scoring via Ollama API
 │   ├── bedrock_extractor.py          # Legacy Bedrock feature extractor (kept for reference)
 │   ├── gmdh_fraud_trainer.py         # Python GMDH trainer for Model A (fraud, 2-layer)
+│   ├── gmdh_fraud_trainer_v2.py      # GMDH trainer v2 (improved node selection)
 │   ├── gmdh_fraud_trainer.scala      # Scala reference implementation (Model A)
 │   ├── gmdh_health_trainer.py        # Python GMDH trainer for Model B (system health)
 │   ├── airflow_pylint_qa/            # Pylint analysis + New Relic APM decorators
 │   └── marketplace_audit/            # Integration tests
+├── train_nn_tensorflow.py            # TensorFlow v6 trainer (Adam + Focal Loss + Cosine LR + EarlyStopping)
+├── train_nn_numpy.py                 # NumPy NN trainer (SGD, research iterations v1-v5)
+├── train_nn_fast.py                  # Quick NN training for validation
 ├── helm/
 │   └── gmdh-engine/                  # Kubernetes Helm chart
 │       ├── Chart.yaml
@@ -464,21 +560,28 @@ gmdh-predictive-engine/
 ├── scripts/
 │   ├── generate_it_dataset.py        # Synthetic infra dataset (10K records)
 │   ├── generate_fraud_dataset.py     # Synthetic fraud dataset (5K records)
-│   └── generate_production_dataset.py # Production-like fraud dataset (50K, with drift)
+│   ├── generate_production_dataset.py # Production-like fraud dataset (50K, with drift)
+│   ├── benchmark_eval.py             # Benchmark evaluation on production dataset
+│   └── prepare_ieee_full.py          # IEEE-CIS dataset preparation (300K records)
 ├── tests/
 │   └── test_model_quality.py         # E2E model quality tests (14 assertions)
 ├── data/
 │   ├── fintech_transactions_raw.csv  # Model B training data
 │   ├── fraud_transactions.csv        # Model A training data (5K)
 │   ├── fraud_production_50k.csv      # Production-like dataset with drift (50K)
-│   ├── fraud_model_coeffs.json       # Model A coefficients (produced by trainer)
+│   ├── fraud_transactions_ieee_full.csv # IEEE-CIS prepared dataset (300K)
+│   ├── fraud_model_coeffs.json       # GMDH Model A coefficients
+│   ├── fraud_model_nn_tf.keras       # TensorFlow NN model (binary, 512→256→128→64→32→1)
+│   ├── fraud_model_nn_tf.json        # NN model metadata + architecture
+│   ├── benchmark_metrics_nn_tf.json  # TF v6 benchmark results (P=0.80, R=0.59, AUC=0.93)
 │   ├── model_b_coeffs.json           # Model B coefficients
 │   ├── model_b_health.json           # Model B health score (used by fallback logic)
 │   └── enriched_transaction.json     # Sample Bedrock-enriched events
 ├── kafka/
 │   └── docker-compose.yaml           # Kafka standalone config (reference)
 ├── docker-compose.yaml               # ALL services: PostgreSQL + Kafka + LocalStack + Ollama + Airflow
-├── Dockerfile                        # Custom Airflow image (Python 3.11 + Kafka client)
+├── Dockerfile                        # Custom Airflow image (Python 3.11 + Kafka + pgvector + numpy)
+├── README_nn_model.md                # Detailed NN training history (v1-v6, failures + decisions)
 ├── .env                              # Environment variables (OLLAMA_MODEL, PostgreSQL creds)
 └── .gitignore
 ```
