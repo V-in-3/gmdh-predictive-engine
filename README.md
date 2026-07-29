@@ -496,6 +496,62 @@ python agents/fraud_investigation_agent.py
 
 Works without LangGraph too (fallback mode with manual step-by-step execution).
 
+### Example Output (RAG with pgvector)
+
+```
+══════════════════════════════════════════════════════════════════════
+FRAUD INVESTIGATION AGENT — RAG DEMO
+══════════════════════════════════════════════════════════════════════
+──────────────────────────────────────────────────────────────────────
+TRANSACTION #1: {'semantic_risk': 0.55, 'velocity_1h': 8, 'proxy_score': 0.4, 'amount_deviation': 1.0}
+──────────────────────────────────────────────────────────────────────
+  Step 1 — SCORE:
+    NN score:   0.431
+    GMDH score: 0.431
+  Step 2 — ROUTE: investigate
+  Step 3 — SIMILARITY SEARCH (pgvector):
+    Verdict: LIKELY_FRAUD
+    Cases found: 3
+      #1 [LEGIT] dist=0.001 — Business subscription renewal with updated card (old expired), sa
+      #2 [FRAUD] dist=0.004 — Subscription with stolen card, address mismatch (billing: NYC, sh
+      #3 [FRAUD] dist=0.010 — Purchase 50 gift cards at $200 each from new account, email domai
+  Step 4 — ROUTE: llm_reason
+  Step 5 — LLM REASONING (RAG-augmented):
+    Mixed signals: NN=0.43, 2 fraud + 1 legit neighbors.
+  ╔══════════════════════════════════════╗
+  ║  DECISION:   BLOCK                   ║
+  ║  Confidence: 70%                     ║
+  ╚══════════════════════════════════════╝
+  Reasoning: Moderate NN score 0.43 + similar to known fraud
+──────────────────────────────────────────────────────────────────────
+TRANSACTION #2: {'semantic_risk': 0.9, 'velocity_1h': 35, 'proxy_score': 0.9, 'amount_deviation': 2.5}
+──────────────────────────────────────────────────────────────────────
+  Step 1 — SCORE:
+    NN score:   1.000
+    GMDH score: 1.000
+  Step 2 — ROUTE: block
+    → Fast path (block), skipping investigation
+  ╔══════════════════════════════════════╗
+  ║  DECISION:   BLOCK                   ║
+  ║  Confidence: 80%                     ║
+  ╚══════════════════════════════════════╝
+  Reasoning: NN score 1.00 above threshold
+──────────────────────────────────────────────────────────────────────
+TRANSACTION #3: {'semantic_risk': 0.1, 'velocity_1h': 1, 'proxy_score': 0.0, 'amount_deviation': 0.1}
+──────────────────────────────────────────────────────────────────────
+  Step 1 — SCORE:
+    NN score:   0.043
+    GMDH score: 0.043
+  Step 2 — ROUTE: allow
+    → Fast path (allow), skipping investigation
+  ╔══════════════════════════════════════╗
+  ║  DECISION:   ALLOW                   ║
+  ║  Confidence: 75%                     ║
+  ╚══════════════════════════════════════╝
+  Reasoning: Low NN score 0.04
+══════════════════════════════════════════════════════════════════════
+```
+
 ---
 
 ##  Technology Stack

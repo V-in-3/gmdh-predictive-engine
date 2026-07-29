@@ -96,7 +96,7 @@ def score_transaction(state: FraudState) -> dict:
 
 
 def search_similar(state: FraudState) -> dict:
-    """Node 2: Search pgvector for similar historical cases."""
+    """Node 2: Search pgvector for similar historical cases (RAG retrieval)."""
     tx = state["transaction"]
 
     try:
@@ -116,15 +116,36 @@ def search_similar(state: FraudState) -> dict:
             np.full(24, base.mean(), dtype=np.float32)
         ])
 
+        # Get full explanation with cases
         explanation = store.explain_decision(embedding, top_k=5)
+        similar_cases = explanation.get("similar_cases", [])
         store.close()
 
+        # Determine verdict from neighbors
+        if similar_cases:
+            fraud_count = sum(1 for c in similar_cases if c.get("metadata", {}).get("is_fraud"))
+            total = len(similar_cases)
+            ratio = fraud_count / total if total > 0 else 0
+
+            if ratio >= 0.8:
+                verdict = "CONFIRMED_FRAUD"
+            elif ratio >= 0.5:
+                verdict = "LIKELY_FRAUD"
+            elif ratio <= 0.2:
+                verdict = "LIKELY_LEGIT"
+            else:
+                verdict = "UNCERTAIN"
+            confidence = max(ratio, 1 - ratio)
+        else:
+            verdict = "NO_HISTORY"
+            confidence = 0.0
+
         return {
-            "similar_cases": explanation.get("similar_cases", []),
-            "similarity_verdict": explanation.get("verdict", "NO_HISTORY"),
-            "similarity_confidence": explanation.get("confidence", 0.0),
+            "similar_cases": similar_cases,
+            "similarity_verdict": verdict,
+            "similarity_confidence": confidence,
         }
-    except Exception as e:
+    except Exception:
         return {
             "similar_cases": [],
             "similarity_verdict": "UNAVAILABLE",
@@ -133,30 +154,45 @@ def search_similar(state: FraudState) -> dict:
 
 
 def llm_reason(state: FraudState) -> dict:
-    """Node 3: Ask LLM to reason about the transaction."""
+    """Node 3: Ask LLM to reason about the transaction (RAG-augmented)."""
     tx = state["transaction"]
     nn_score = state["nn_score"]
     gmdh_score = state["gmdh_score"]
     similar = state["similar_cases"]
 
+    # Build RAG context from retrieved cases
+    rag_context = ""
+    if similar:
+        rag_context = "\nSIMILAR HISTORICAL CASES (from pgvector cosine search):\n"
+        for i, case in enumerate(similar[:5], 1):
+            meta = case.get("metadata", {})
+            distance = case.get("distance", 0)
+            label = "FRAUD" if meta.get("is_fraud") else "LEGIT"
+            desc = meta.get("description", "No description")
+            reason = meta.get("reason", "")
+            rag_context += f"\n  Case #{i} (distance: {distance:.3f}, {label}):\n"
+            rag_context += f"    \"{desc}\"\n"
+            if reason:
+                rag_context += f"    Verdict reason: {reason}\n"
+    else:
+        rag_context = "\nNo similar historical cases found in pgvector.\n"
+
     prompt = f"""You are a fraud analyst. Analyze this transaction and provide a brief reasoning.
 
-Transaction:
+CURRENT TRANSACTION:
 - Semantic risk (from NLP): {tx.get('semantic_risk', 'N/A')}
 - Velocity (transactions/hour): {tx.get('velocity_1h', 'N/A')}
 - Proxy score: {tx.get('proxy_score', 'N/A')}
 - Amount deviation from user mean: {tx.get('amount_deviation', 'N/A')}
 
-Model scores:
+MODEL SCORES:
 - Neural Network: {nn_score:.3f} (threshold: 0.75)
 - GMDH polynomial: {gmdh_score:.3f}
-
-Similar historical cases found: {len(similar)}
-Similarity verdict: {state['similarity_verdict']}
-
-Provide:
+{rag_context}
+Based on the transaction data and similar historical cases, provide:
 1. Your assessment (BLOCK/ALLOW/REVIEW)
-2. Brief reasoning (1-2 sentences)
+2. Which historical cases support your decision (if any)
+3. Brief reasoning (2-3 sentences)
 """
 
     # Try Ollama (local LLM)
@@ -175,19 +211,31 @@ Provide:
             data=payload,
             headers={"Content-Type": "application/json"}
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             result = json.loads(resp.read().decode())
             llm_response = result.get("response", "")
 
         return {"llm_explanation": llm_response}
-    except Exception as e:
-        # Fallback: rule-based explanation
-        if nn_score > 0.7:
-            explanation = f"High fraud probability ({nn_score:.2f}). Multiple risk signals active."
-        elif nn_score > 0.4:
-            explanation = f"Moderate risk ({nn_score:.2f}). Recommend manual review."
+    except Exception:
+        # Fallback: rule-based explanation with RAG context
+        if similar:
+            fraud_cases = [c for c in similar if c.get("metadata", {}).get("is_fraud")]
+            legit_cases = [c for c in similar if not c.get("metadata", {}).get("is_fraud")]
+            if fraud_cases and nn_score > 0.5:
+                case_desc = fraud_cases[0].get("metadata", {}).get("description", "unknown")
+                explanation = f"Matches fraud pattern: \"{case_desc[:60]}\" (distance: {fraud_cases[0].get('distance', 0):.3f}). NN score {nn_score:.2f} confirms."
+            elif legit_cases and nn_score < 0.4:
+                case_desc = legit_cases[0].get("metadata", {}).get("description", "unknown")
+                explanation = f"Similar to legit case: \"{case_desc[:60]}\". Low NN score {nn_score:.2f} supports ALLOW."
+            else:
+                explanation = f"Mixed signals: NN={nn_score:.2f}, {len(fraud_cases)} fraud + {len(legit_cases)} legit neighbors."
         else:
-            explanation = f"Low risk ({nn_score:.2f}). No strong fraud indicators."
+            if nn_score > 0.7:
+                explanation = f"High fraud probability ({nn_score:.2f}). Multiple risk signals active."
+            elif nn_score > 0.4:
+                explanation = f"Moderate risk ({nn_score:.2f}). Recommend manual review."
+            else:
+                explanation = f"Low risk ({nn_score:.2f}). No strong fraud indicators."
 
         return {"llm_explanation": explanation}
 

@@ -1,0 +1,212 @@
+[
+  {
+    "id": "CASE-001",
+    "description": "Bulk purchase 200 smartphones at $15 each, account created 2 days ago, VPN/proxy detected, shipping to freight forwarder",
+    "features": {"semantic_risk": 0.92, "velocity_1h": 35, "proxy_score": 0.95, "amount_deviation": 3.1},
+    "is_fraud": true,
+    "reason": "Stolen card resale ring. Chargeback confirmed within 48h. Freight forwarder linked to 12 previous fraud cases."
+  },
+  {
+    "id": "CASE-002",
+    "description": "Purchase 50 gift cards at $200 each from new account, email domain is disposable (guerrillamail)",
+    "features": {"semantic_risk": 0.88, "velocity_1h": 28, "proxy_score": 0.7, "amount_deviation": 2.8},
+    "is_fraud": true,
+    "reason": "Gift card laundering. Cards redeemed within 1 hour across multiple accounts. Linked to organized ring."
+  },
+  {
+    "id": "CASE-003",
+    "description": "Annual subscription upgrade from monthly, existing customer 3 years, same device fingerprint, no proxy",
+    "features": {"semantic_risk": 0.08, "velocity_1h": 1, "proxy_score": 0.0, "amount_deviation": 0.2},
+    "is_fraud": false,
+    "reason": "Legitimate upgrade. Customer has consistent payment history, same billing address for 3 years."
+  },
+  {
+    "id": "CASE-004",
+    "description": "Rapid-fire trial signups from same IP range, 15 accounts in 1 hour, all with similar email pattern (random+number@gmail)",
+    "features": {"semantic_risk": 0.85, "velocity_1h": 42, "proxy_score": 0.6, "amount_deviation": 0.1},
+    "is_fraud": true,
+    "reason": "Trial abuse / account farming. Same device fingerprint across all signups. Goal: resell premium access."
+  },
+  {
+    "id": "CASE-005",
+    "description": "Corporate bulk license purchase, 500 seats, wire transfer, verified business domain, existing B2B relationship",
+    "features": {"semantic_risk": 0.12, "velocity_1h": 1, "proxy_score": 0.1, "amount_deviation": 1.8},
+    "is_fraud": false,
+    "reason": "Legitimate B2B purchase. Company verified via Dun & Bradstreet. High amount deviation is normal for enterprise deals."
+  },
+  {
+    "id": "CASE-006",
+    "description": "Subscription with stolen card, address mismatch (billing: NYC, shipping: Lagos), high-value electronics bundle",
+    "features": {"semantic_risk": 0.95, "velocity_1h": 8, "proxy_score": 0.85, "amount_deviation": 2.5},
+    "is_fraud": true,
+    "reason": "Classic card-not-present fraud. Address mismatch + proxy + high-value items. Chargeback filed by real cardholder."
+  },
+  {
+    "id": "CASE-007",
+    "description": "Monthly renewal, autopay, customer since 2021, same payment method, watching patterns consistent",
+    "features": {"semantic_risk": 0.05, "velocity_1h": 1, "proxy_score": 0.0, "amount_deviation": 0.0},
+    "is_fraud": false,
+    "reason": "Routine autopay renewal. Zero risk indicators. Consistent behavioral pattern over 4 years."
+  },
+  {
+    "id": "CASE-008",
+    "description": "Account takeover: password changed, email changed, then immediate high-value purchase within 5 minutes",
+    "features": {"semantic_risk": 0.91, "velocity_1h": 18, "proxy_score": 0.75, "amount_deviation": 3.5},
+    "is_fraud": true,
+    "reason": "Account takeover (ATO). Credential stuffing attack. Original owner reported unauthorized access 6 hours later."
+  },
+  {
+    "id": "CASE-009",
+    "description": "Family plan upgrade, adding 3 members, existing customer, payment with card on file, residential IP",
+    "features": {"semantic_risk": 0.15, "velocity_1h": 3, "proxy_score": 0.0, "amount_deviation": 0.5},
+    "is_fraud": false,
+    "reason": "Legitimate family plan expansion. Consistent with customer lifecycle (kids reaching streaming age)."
+  },
+  {
+    "id": "CASE-010",
+    "description": "Bulk discount code redemption, 30 codes applied across 30 accounts in 10 minutes, all from same subnet",
+    "features": {"semantic_risk": 0.82, "velocity_1h": 30, "proxy_score": 0.5, "amount_deviation": 0.3},
+    "is_fraud": true,
+    "reason": "Promo code abuse. Codes leaked on forum, mass-redeemed by bot network. Revenue loss: $1,500."
+  },
+  {
+    "id": "CASE-011",
+    "description": "Student discount purchase with valid .edu email, single subscription, low-cost plan, mobile device",
+    "features": {"semantic_risk": 0.10, "velocity_1h": 1, "proxy_score": 0.0, "amount_deviation": 0.1},
+    "is_fraud": false,
+    "reason": "Legitimate student subscription. Email verified via university SSO integration."
+  },
+  {
+    "id": "CASE-012",
+    "description": "Subscription purchased with prepaid virtual card, Tor exit node detected, new account, premium tier immediately",
+    "features": {"semantic_risk": 0.89, "velocity_1h": 5, "proxy_score": 1.0, "amount_deviation": 1.9},
+    "is_fraud": true,
+    "reason": "Anonymized fraud attempt. Prepaid card + Tor = untraceable. Pattern matches carding forum tutorials."
+  },
+  {
+    "id": "CASE-013",
+    "description": "Long-time customer switching from annual to monthly during known financial hardship period (post-holiday)",
+    "features": {"semantic_risk": 0.20, "velocity_1h": 1, "proxy_score": 0.0, "amount_deviation": 0.3},
+    "is_fraud": false,
+    "reason": "Legitimate downgrade. Common pattern in January. Customer retained, lower tier but no churn."
+  },
+  {
+    "id": "CASE-014",
+    "description": "Multiple failed payment attempts (5x), then success with different card, followed by immediate content download binge",
+    "features": {"semantic_risk": 0.78, "velocity_1h": 12, "proxy_score": 0.4, "amount_deviation": 1.2},
+    "is_fraud": true,
+    "reason": "Card testing + successful fraud. First 5 cards were invalid (testing stolen batch). 6th worked. Downloaded all premium content within 30 min."
+  },
+  {
+    "id": "CASE-015",
+    "description": "Business subscription renewal with updated card (old expired), same company domain, same admin user",
+    "features": {"semantic_risk": 0.07, "velocity_1h": 1, "proxy_score": 0.05, "amount_deviation": 0.1},
+    "is_fraud": false,
+    "reason": "Normal card rotation due to expiration. All other signals unchanged. Zero risk."
+  },
+  {
+    "id": "CASE-016",
+    "description": "Flash sale: 20 annual subscriptions purchased in 3 minutes, all shipped to same address, different cards",
+    "features": {"semantic_risk": 0.90, "velocity_1h": 40, "proxy_score": 0.6, "amount_deviation": 2.0},
+    "is_fraud": true,
+    "reason": "Subscription stacking fraud during flash sale. Multiple stolen cards used to buy discounted annual plans for resale."
+  },
+  {
+    "id": "CASE-017",
+    "description": "Senior citizen account, monthly auto-renewal, single device, consistent low-bandwidth usage, 5-year customer",
+    "features": {"semantic_risk": 0.03, "velocity_1h": 1, "proxy_score": 0.0, "amount_deviation": 0.0},
+    "is_fraud": false,
+    "reason": "Completely routine. Elderly customer with predictable usage pattern. Model of low-risk subscriber."
+  },
+  {
+    "id": "CASE-018",
+    "description": "Refund request immediately after purchase, then re-purchase with different promo code, repeated 4 times",
+    "features": {"semantic_risk": 0.75, "velocity_1h": 8, "proxy_score": 0.2, "amount_deviation": 0.4},
+    "is_fraud": true,
+    "reason": "Refund abuse / promo exploitation. Customer exploiting refund-then-rebuy loophole to stack discounts."
+  },
+  {
+    "id": "CASE-019",
+    "description": "International purchase from tourist IP (hotel WiFi in Japan), existing US customer, same device UUID",
+    "features": {"semantic_risk": 0.30, "velocity_1h": 2, "proxy_score": 0.3, "amount_deviation": 0.2},
+    "is_fraud": false,
+    "reason": "Legitimate travel. IP geolocation mismatch explained by hotel WiFi. Device fingerprint confirms identity."
+  },
+  {
+    "id": "CASE-020",
+    "description": "Credential sharing: single account streaming simultaneously from 8 different IPs across 3 countries",
+    "features": {"semantic_risk": 0.70, "velocity_1h": 8, "proxy_score": 0.4, "amount_deviation": 0.0},
+    "is_fraud": true,
+    "reason": "Account sharing / credential selling. Single subscription resold on black market for shared access."
+  },
+  {
+    "id": "CASE-021",
+    "description": "Black Friday purchase, existing customer, annual plan at 50% off, single transaction, home IP",
+    "features": {"semantic_risk": 0.18, "velocity_1h": 2, "proxy_score": 0.0, "amount_deviation": 0.8},
+    "is_fraud": false,
+    "reason": "Legitimate Black Friday deal. Customer waited for sale (browsed pricing page 3x in prior week)."
+  },
+  {
+    "id": "CASE-022",
+    "description": "Synthetic identity: real SSN + fake name + new address, premium subscription, high-value add-ons",
+    "features": {"semantic_risk": 0.93, "velocity_1h": 3, "proxy_score": 0.5, "amount_deviation": 2.2},
+    "is_fraud": true,
+    "reason": "Synthetic identity fraud. SSN belongs to minor/deceased. Identity built over months for this purchase."
+  },
+  {
+    "id": "CASE-023",
+    "description": "Employee discount purchase, verified corporate email, single standard plan, payroll deduction",
+    "features": {"semantic_risk": 0.05, "velocity_1h": 1, "proxy_score": 0.1, "amount_deviation": 0.1},
+    "is_fraud": false,
+    "reason": "Internal employee benefit. Verified via HR system integration. Payroll deduction = zero chargeback risk."
+  },
+  {
+    "id": "CASE-024",
+    "description": "Charityware: 100 gift subscriptions purchased for shelter, corporate card, verified nonprofit, press release planned",
+    "features": {"semantic_risk": 0.25, "velocity_1h": 5, "proxy_score": 0.0, "amount_deviation": 2.8},
+    "is_fraud": false,
+    "reason": "Legitimate charity bulk purchase. High volume + high amount but verified nonprofit with history."
+  },
+  {
+    "id": "CASE-025",
+    "description": "Late-night purchase 3 AM, new card added, premium tier, VPN active, account dormant for 6 months",
+    "features": {"semantic_risk": 0.72, "velocity_1h": 4, "proxy_score": 0.7, "amount_deviation": 1.5},
+    "is_fraud": true,
+    "reason": "Account compromise during dormancy. Attacker gained access via leaked credentials from other breach."
+  },
+  {
+    "id": "CASE-026",
+    "description": "Returning customer resubscribing after 3-month break, same email, same card, win-back offer applied",
+    "features": {"semantic_risk": 0.12, "velocity_1h": 1, "proxy_score": 0.0, "amount_deviation": 0.3},
+    "is_fraud": false,
+    "reason": "Win-back conversion. Customer left, received re-engagement email, returned. Normal lifecycle."
+  },
+  {
+    "id": "CASE-027",
+    "description": "API-driven bulk subscription creation via partner integration, 200 accounts, OAuth token, rate-limited correctly",
+    "features": {"semantic_risk": 0.15, "velocity_1h": 50, "proxy_score": 0.1, "amount_deviation": 0.2},
+    "is_fraud": false,
+    "reason": "Legitimate partner API integration. High velocity is expected (batch provisioning). OAuth verified."
+  },
+  {
+    "id": "CASE-028",
+    "description": "Micro-transactions: 50 purchases of $0.99 add-ons in rapid succession, testing if card works before big purchase",
+    "features": {"semantic_risk": 0.80, "velocity_1h": 50, "proxy_score": 0.3, "amount_deviation": 0.1},
+    "is_fraud": true,
+    "reason": "Card testing via micro-transactions. Fraudster validates stolen cards before making large purchase elsewhere."
+  },
+  {
+    "id": "CASE-029",
+    "description": "Free tier user converting to paid after 30-day trial, consistent daily usage throughout trial, organic behavior",
+    "features": {"semantic_risk": 0.08, "velocity_1h": 1, "proxy_score": 0.0, "amount_deviation": 0.1},
+    "is_fraud": false,
+    "reason": "Ideal trial-to-paid conversion. User engaged throughout trial. Healthy customer acquisition."
+  },
+  {
+    "id": "CASE-030",
+    "description": "Coordinated attack: 15 different accounts, same device fingerprint, purchasing same premium plan within 2-minute window",
+    "features": {"semantic_risk": 0.94, "velocity_1h": 45, "proxy_score": 0.8, "amount_deviation": 1.8},
+    "is_fraud": true,
+    "reason": "Coordinated bot attack. Single operator using browser automation. Device fingerprint hash identical across all accounts."
+  }
+]
