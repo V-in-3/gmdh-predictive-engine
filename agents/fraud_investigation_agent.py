@@ -211,7 +211,7 @@ Based on the transaction data and similar historical cases, provide:
             data=payload,
             headers={"Content-Type": "application/json"}
         )
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             result = json.loads(resp.read().decode())
             llm_response = result.get("response", "")
 
