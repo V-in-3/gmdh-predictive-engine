@@ -1,32 +1,10 @@
-# GMDH Predictive Engine — Anti-Fraud + System Health Benchmark Workflow
+# GMDH Predictive Engine — Fraud Detection with ML, RAG & Agentic AI
 
-This repository implements a practical anti-fraud + system-health use case. The flow uses semantic signals from Bedrock/Ollama to enrich transaction data, but the final decision is constrained by a predictive GMDH model and by the current system-health state. In other words, the predictive model acts as a guardrail: it limits or suppresses downstream fraud decisions when the health signal is weak or the semantic evidence is unreliable.
+End-to-end fraud detection system combining classical ML (GMDH polynomials), deep learning (TensorFlow NN), vector similarity search (pgvector), and an LLM-powered investigation agent (LangGraph + Ollama). Orchestrated by Airflow, containerized with Docker, deployable to Kubernetes via Helm.
 
-The benchmark workflow is included so the same pipeline can be evaluated against a real-ish benchmark dataset, not only synthetic data. The goal is to validate the end-to-end flow: normalize data, score rows, compute metrics, and write outputs for comparison.
+**Key results:** TensorFlow NN v6 — Precision 0.80, Recall 0.59, AUC 0.93 | RAG agent — 5/5 correct on benchmark | Fine-tuned LLM (LoRA) — loss 3.06 → 0.06 in 1 min on M1 Pro
 
-### What this case covers
-- Anti-fraud scoring on transaction-like data
-- System-health monitoring as a separate signal
-- Predictive gating of Bedrock/Ollama-driven decisions
-- Benchmark-based validation with metrics such as precision, recall, F1, and AUC-ROC
-
-### Benchmark workflow
-Use the benchmark runner to validate the flow:
-
-```powershell
-& "C:/Users/User/AppData/Roaming/uv/python/cpython-3.14.6-windows-x86_64-none/python.exe" scripts/benchmark_eval.py data/fraud_production_50k.csv --output_path data/benchmark_normalized.csv --model_output_path data/benchmark_model.json --metrics_output_path data/benchmark_metrics.json
-```
-
-For model comparison:
-
-```powershell
-& "C:/Users/User/AppData/Roaming/uv/python/cpython-3.14.6-windows-x86_64-none/python.exe" scripts/compare_benchmark_models.py data/fraud_production_50k.csv --output_path data/benchmark_model_comparison.json
-```
-
-### Working rules
-- Before any code change, you must confirm with me first.
-- I will not make code changes, commits, pushes, or PRs unless you explicitly confirm.
-- If a change is large or risky, I will summarize the intent and expected impact before applying it.
+> See also: [README_nn_model.md](README_nn_model.md) — NN training evolution (v1→v6, documented failures) | [README_benchmark_dag.md](README_benchmark_dag.md) — benchmark workflow details
 
 ---
 
@@ -35,11 +13,15 @@ For model comparison:
 This is a portfolio project that showcases:
 
 - **MLOps lifecycle** — data generation → training → model persistence → inference → cleanup
+- **Multi-model scoring** — TensorFlow NN (primary, AUC 0.93) + GMDH polynomial (interpretable fallback)
+- **RAG pipeline** — pgvector retrieval → augmented LLM prompt → case-based reasoning
+- **Agentic AI** — LangGraph state machine with adaptive routing by confidence level
+- **Fine-tuned LLM** — LoRA on Apple Silicon (MLX), deployable to Ollama
 - **Transparent ML** — GMDH produces an interpretable polynomial, not a black-box prediction
 - **Data pipeline engineering** — Kafka ingestion, PostgreSQL sync, DLQ handling, recursive reconciliation
 - **Infrastructure as Code** — fully Dockerized + Helm charts for Kubernetes deployment
 - **Production patterns** — idempotency, dead letter queues, self-healing DAGs, parallel processing
-- **Pluggable architecture** — scoring engine factory with A/B comparison (GMDH vs Ollama vs mock)
+- **Pluggable architecture** — scoring engine factory with A/B comparison (GMDH vs Ollama vs mock vs NN)
 - **Local LLM integration** — Ollama for real semantic analysis without cloud dependencies
 - **Observability** — New Relic APM decorators for Airflow task tracing
 - **Connected architecture** — all DAGs are linked into a single feedback-driven ecosystem
@@ -495,6 +477,29 @@ python agents/fraud_investigation_agent.py
 ```
 
 Works without LangGraph too (fallback mode with manual step-by-step execution).
+
+### Fine-tuned Fraud Model (LoRA, MLX)
+
+TinyLlama fine-tuned on 20 fraud analysis examples via LoRA (8 layers, 200 iterations).
+
+| Metric | Value |
+|--------|-------|
+| Base model | TinyLlama 1.1B Chat |
+| Method | LoRA (0.2% trainable params) |
+| Training loss | 3.06 → 0.06 (200 iters) |
+| Hardware | Apple M1 Pro, 3 GB peak RAM |
+| Time | ~1 minute |
+
+**Train → Deploy cycle:**
+```
+mlx_lm.lora --train (LoRA adapter)
+    → mlx_lm.fuse (merge weights)
+    → convert to GGUF (quantize)
+    → ollama create fraud-analyst
+    → OLLAMA_MODEL=fraud-analyst in .env
+```
+
+**Result:** Model responds in structured format (BLOCK/ALLOW + confidence + case references) instead of generic LLM text.
 
 ### Example Output (RAG with pgvector)
 
