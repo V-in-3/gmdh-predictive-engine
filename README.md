@@ -613,6 +613,39 @@ Once running: `http://localhost:8000/docs` — Swagger UI for testing.
 
 ---
 
+##  Monitoring Dashboard (Grafana)
+
+Pre-configured Grafana dashboard connected to pgvector — shows fraud scoring metrics in real-time.
+
+### Access
+
+```
+http://localhost:3000  (admin / admin)
+```
+
+### Dashboard Panels
+
+| Panel | What it shows |
+|-------|---------------|
+| Transactions Scored (24h) | Total embeddings stored in last 24 hours |
+| Fraud Rate (%) | Percentage of transactions marked as fraud |
+| Avg Fraud Score | Mean model confidence |
+| Seed Cases | Total cases in pgvector knowledge base |
+| Score Distribution | Histogram of fraud_score values |
+| Fraud vs Legit | Pie chart ratio |
+| Recent Decisions | Last 20 scored transactions |
+| Scoring Timeline | fraud_score over time (time series) |
+
+### Auto-provisioned
+
+Dashboard and PostgreSQL datasource are auto-loaded on first startup via `grafana/provisioning/`. No manual configuration needed.
+
+### Screenshot
+
+<img src="img/grafana.png" width="800" alt="Grafana Fraud Detection Dashboard">
+
+---
+
 ##  Technology Stack
 
 | Layer | Technology | Purpose |

@@ -1,0 +1,13 @@
+apiVersion: 1
+datasources:
+  - name: PostgreSQL
+    type: postgres
+    access: proxy
+    url: gmdh-postgres:5432
+    database: airflow_db
+    user: airflow_user
+    secureJsonData:
+      password: airflow_pass
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
