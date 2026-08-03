@@ -1,0 +1,114 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Transactions Scored (last 24h)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT COUNT(*) FROM transaction_embeddings WHERE created_at > NOW() - INTERVAL '24 hours'",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {"thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 100}]}}
+      }
+    },
+    {
+      "title": "Fraud Rate (%)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT ROUND(100.0 * SUM(CASE WHEN is_fraud THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) AS fraud_pct FROM transaction_embeddings WHERE created_at > NOW() - INTERVAL '24 hours'",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {"unit": "percent", "thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "orange", "value": 3}, {"color": "red", "value": 10}]}}
+      }
+    },
+    {
+      "title": "Avg Fraud Score",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT ROUND(AVG(fraud_score)::numeric, 3) FROM transaction_embeddings WHERE created_at > NOW() - INTERVAL '24 hours'",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {"thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "orange", "value": 0.5}, {"color": "red", "value": 0.75}]}}
+      }
+    },
+    {
+      "title": "Seed Cases in pgvector",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT COUNT(*) FROM transaction_embeddings",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {"thresholds": {"steps": [{"color": "blue", "value": 0}]}}
+      }
+    },
+    {
+      "title": "Fraud Score Distribution",
+      "type": "histogram",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT fraud_score FROM transaction_embeddings ORDER BY created_at DESC LIMIT 500",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {"custom": {"fillOpacity": 80}}
+      }
+    },
+    {
+      "title": "Fraud vs Legit (pie)",
+      "type": "piechart",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 4},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT CASE WHEN is_fraud THEN 'Fraud' ELSE 'Legit' END as label, COUNT(*) as count FROM transaction_embeddings GROUP BY is_fraud",
+        "format": "table"
+      }]
+    },
+    {
+      "title": "Recent Decisions (table)",
+      "type": "table",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 4},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT transaction_id, fraud_score, is_fraud, created_at FROM transaction_embeddings ORDER BY created_at DESC LIMIT 20",
+        "format": "table"
+      }]
+    },
+    {
+      "title": "Scoring Timeline (fraud_score over time)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT created_at AS time, fraud_score, CASE WHEN is_fraud THEN 'fraud' ELSE 'legit' END AS metric FROM transaction_embeddings ORDER BY created_at",
+        "format": "time_series"
+      }],
+      "fieldConfig": {
+        "defaults": {"custom": {"lineWidth": 2, "pointSize": 5}}
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["fraud", "ml", "pgvector"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "title": "Fraud Detection — ML Pipeline",
+  "uid": "fraud-detection-ml"
+}

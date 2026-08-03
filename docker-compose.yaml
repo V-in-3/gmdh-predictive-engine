@@ -202,10 +202,30 @@ services:
     networks:
       - gmdh_net
 
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: gmdh-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - gmdh_net
+
 volumes:
   postgres_data:
   kafka_data:
   ollama_data:
+  grafana_data:
 
 networks:
   gmdh_net:
