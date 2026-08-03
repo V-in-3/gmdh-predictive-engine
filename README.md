@@ -559,6 +559,60 @@ TRANSACTION #3: {'semantic_risk': 0.1, 'velocity_1h': 1, 'proxy_score': 0.0, 'am
 
 ---
 
+##  Fraud Scoring API (FastAPI)
+
+Real-time HTTP endpoint that exposes the full agent pipeline as a microservice.
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/score` | Score a single transaction (full agent pipeline) |
+| POST | `/batch` | Score up to 50 transactions |
+| GET | `/health` | Check pgvector + Ollama availability |
+| GET | `/cases` | List seed cases in pgvector |
+
+### Usage
+
+```bash
+# Start API (inside running Docker stack)
+docker exec gmdh-airflow pip install fastapi uvicorn
+docker exec gmdh-airflow bash -c "cd /opt/airflow/project && nohup uvicorn api.serve:app --host 0.0.0.0 --port 8000 > /tmp/api.log 2>&1 &"
+
+# Health check
+docker exec gmdh-airflow curl -s http://localhost:8000/health
+
+# Score a transaction
+docker exec gmdh-airflow curl -s -X POST http://localhost:8000/score \
+  -H "Content-Type: application/json" \
+  -d '{"semantic_risk": 0.75, "velocity_1h": 15, "proxy_score": 0.6, "amount_deviation": 1.8}'
+```
+
+### Response
+
+```json
+{
+  "transaction_id": "api-1719900000",
+  "decision": "BLOCK",
+  "confidence": 0.85,
+  "nn_score": 0.78,
+  "gmdh_score": 0.78,
+  "route": "investigate",
+  "similarity_verdict": "CONFIRMED_FRAUD",
+  "similar_cases": [
+    {"id": "Subscription with stolen card, address mismatch", "is_fraud": true, "distance": 0.003}
+  ],
+  "reasoning": "NN score 0.78 + pgvector confirms fraud pattern",
+  "latency_ms": 45.2
+}
+```
+
+### Interactive Docs
+
+Once running: `http://localhost:8000/docs` — Swagger UI for testing.
+
+---
+
 ##  Technology Stack
 
 | Layer | Technology | Purpose |
