@@ -121,6 +121,7 @@ services:
     container_name: gmdh-airflow
     ports:
       - "8080:8080"
+      - "8000:8000"
     volumes:
       - .:/opt/airflow/project
       - ./dags:/opt/airflow/dags

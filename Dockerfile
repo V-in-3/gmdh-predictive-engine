@@ -6,4 +6,6 @@ RUN pip install --no-cache-dir \
     confluent-kafka \
     psycopg2-binary \
     pgvector \
-    numpy
+    numpy \
+    fastapi \
+    uvicorn[standard]
