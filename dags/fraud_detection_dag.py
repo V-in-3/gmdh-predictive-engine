@@ -31,7 +31,6 @@ BENCHMARK_THRESHOLDS = {
     'auc_roc': 0.78,
 }
 
-
 @dag(
     default_args={'owner': 'airflow'},
     start_date=datetime(2026, 6, 18),
@@ -187,9 +186,44 @@ def fraud_detection_engine():
 
         logging.warning(
             "BENCHMARK GATE: FAIL — one or more metrics are below threshold. "
-            "Fraud inference will be SKIPPED to prevent deploying a degraded model."
+            "Trying the TensorFlow NN fallback before Ollama."
         )
         return "FAIL"
+
+    @task
+    def select_inference_engine(gate_result):
+        """Select GMDH, TensorFlow NN, Ollama, or skip after quality checks."""
+        if gate_result == "PASS":
+            logging.info("Inference engine selected: GMDH (passed benchmark gate).")
+            return "gmdh"
+
+        nn_metrics_path = f'{DATA_DIR}/benchmark_metrics_nn_tf.json'
+        try:
+            with open(nn_metrics_path, 'r') as fh:
+                nn_metrics = json.load(fh)
+            nn_pass = all(
+                nn_metrics.get(metric, 0.0) >= threshold
+                for metric, threshold in BENCHMARK_THRESHOLDS.items()
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            logging.warning("TensorFlow NN benchmark unavailable: %s", exc)
+            nn_pass = False
+
+        nn_model_path = f'{DATA_DIR}/fraud_model_nn_tf.keras'
+        if nn_pass and os.path.exists(nn_model_path):
+            logging.warning("GMDH gate failed. TensorFlow NN passed benchmark; selecting NN.")
+            return "tensorflow_nn"
+
+        try:
+            import urllib.request
+            ollama_url = os.environ.get('OLLAMA_URL', 'http://gmdh-ollama:11434')
+            urllib.request.urlopen(f'{ollama_url}/api/tags', timeout=5).close()
+            logging.warning("GMDH and TensorFlow NN unavailable or failed gate; selecting Ollama.")
+            return "ollama"
+        except Exception as exc:
+            logging.warning("Ollama fallback unavailable: %s", exc)
+            logging.error("No inference engine passed or is available; inference skipped.")
+            return "skip"
 
     @task
     def save_champion():
@@ -232,6 +266,11 @@ def fraud_detection_engine():
         import shutil
 
         champion_path = f'{DATA_DIR}/fraud_model_coeffs_champion.json'
+        logging.info(
+            "CHAMPION-CHALLENGER: promote_or_restore started. gate_result=%s, "
+            "champion_path=%s, model_path=%s",
+            gate_result, champion_path, MODEL_A_PATH,
+        )
 
         if gate_result == "PASS":
             logging.info(
@@ -250,13 +289,19 @@ def fraud_detection_engine():
             )
             return "NO_CHAMPION_TO_RESTORE"
 
-        shutil.copy2(champion_path, MODEL_A_PATH)
+        logging.info(
+            "CHAMPION-CHALLENGER: restoring champion. source_exists=%s, "
+            "source=%s, destination=%s",
+            os.path.exists(champion_path), champion_path, MODEL_A_PATH,
+        )
+        shutil.copyfile(champion_path, MODEL_A_PATH)
         logging.warning(
             "CHAMPION-CHALLENGER: FAIL — challenger failed benchmark gate. "
             "Champion restored from %s to %s. "
             "Inference will use the previous known-good model.",
             champion_path, MODEL_A_PATH,
         )
+        logging.info("CHAMPION-CHALLENGER: restore completed successfully.")
         return "RESTORED"
 
     @task
@@ -299,22 +344,17 @@ def fraud_detection_engine():
         return "ENABLED"
 
     @task
-    def run_fraud_inference(health_status, benchmark_gate):
-        """Apply fraud model via configured scoring engine."""
-        from jobs.scoring_engine import get_engine
+    def run_fraud_inference(health_status, selected_engine):
+        """Run the engine selected by the benchmark fallback chain."""
+        from jobs.redshift_ml_job import predict_transaction
 
-        if benchmark_gate == "FAIL":
-            logging.warning(
-                "Skipping inference — benchmark gate FAILED. "
-                "Model quality is below thresholds. Check benchmark_metrics.json for details."
-            )
+        if selected_engine == "skip":
+            logging.warning("Skipping inference — no engine passed or is available.")
             return
 
         if health_status == "DISABLED":
             logging.warning("Skipping inference — system in fallback mode (health check DISABLED).")
             return
-
-        engine = get_engine(SCORING_ENGINE)
 
         events = [
             {"semantic_risk": 0.85, "velocity_1h": 12, "proxy_score": 1.0, "amount_deviation": 2.1},
@@ -322,15 +362,43 @@ def fraud_detection_engine():
             {"semantic_risk": 0.6, "velocity_1h": 25, "proxy_score": 0.5, "amount_deviation": 1.5},
         ]
 
-        results = engine.score_transactions(events, model_path=MODEL_A_PATH)
+        try:
+            if selected_engine == 'tensorflow_nn':
+                from jobs.engines.tensorflow_engine import TensorFlowEngine
+                engine = TensorFlowEngine()
+            elif selected_engine == 'ollama':
+                from jobs.engines.ollama_engine import OllamaEngine
+                engine = OllamaEngine()
+            else:
+                from jobs.engines.gmdh_engine import GmdhEngine
+                engine = GmdhEngine()
+            results = engine.score_transactions(events, model_path=MODEL_A_PATH)
+            engine_name = engine.engine_name
+            logging.info("Fraud inference selected engine: %s", engine_name)
+        except Exception as exc:
+            logging.error("Selected inference engine %s failed: %s", selected_engine, exc)
+            return
 
         print("-" * 70)
-        print(f"| {'#':>2} | {'SEM_RISK':>8} | {'VEL':>4} | {'PROXY':>5} | {'AMT_DEV':>7} | {'SCORE':>7} | {'DECISION':>8} |")
+        print(f"| {'#':>2} | {'GMDH':>7} | {'REDSHIFT':>8} | {'DECISION':>8} |")
         print("-" * 70)
         for i, (tx, r) in enumerate(zip(events, results), 1):
-            print(f"| {i:>2} | {tx['semantic_risk']:>8.2f} | {tx['velocity_1h']:>4.0f} | {tx['proxy_score']:>5.1f} | {tx['amount_deviation']:>7.2f} | {r['score']:>7.4f} | {r['decision']:>8} |")
+            redshift_score = predict_transaction(tx)
+            if redshift_score is None:
+                decision = r['decision']
+                redshift_display = "N/A"
+            elif redshift_score > 0.55 and r['score'] > 0.55:
+                decision = "BLOCK"
+                redshift_display = f"{redshift_score:.4f}"
+            elif redshift_score <= 0.55 and r['score'] <= 0.55:
+                decision = "ALLOW"
+                redshift_display = f"{redshift_score:.4f}"
+            else:
+                decision = "REVIEW"
+                redshift_display = f"{redshift_score:.4f}"
+            print(f"| {i:>2} | {r['score']:>7.4f} | {redshift_display:>8} | {decision:>8} |")
         print("-" * 70)
-        print(f"Engine: {engine.engine_name}")
+        print(f"Primary engine: {engine_name}; Redshift ML is final optional signal")
 
     @task
     def compare_engines(health_status, benchmark_gate):
@@ -384,6 +452,18 @@ def fraud_detection_engine():
             print(f"| {i+1:>2} | {gmdh_str:>12} | {mock_str:>12} | {ollama_str:>12} | {agree:>5} |")
 
         print("=" * 80)
+
+    @task
+    def check_redshift_ml_access():
+        from jobs.redshift_ml_job import check_access
+
+        return check_access()
+
+    @task
+    def run_redshift_ml_case(redshift_config):
+        from jobs.redshift_ml_job import run_case
+
+        return run_case(redshift_config)
 
     @task(trigger_rule='all_done')
     def cleanup():
@@ -579,8 +659,11 @@ def fraud_detection_engine():
     benchmark = run_benchmark_evaluation()
     gate = validate_benchmark_gate()
     promotion = promote_or_restore(gate)
+    redshift_access = check_redshift_ml_access()
+    redshift_ml = run_redshift_ml_case(redshift_access)
     health = check_system_health()
-    inference = run_fraud_inference(health, gate)
+    selected_engine = select_inference_engine(gate)
+    inference = run_fraud_inference(health, selected_engine)
     comparison = compare_engines(health, gate)
     sim_search = similarity_search(health, gate)
     clean = cleanup()
@@ -588,6 +671,8 @@ def fraud_detection_engine():
     [save_champ, enrichment] >> model_a
     [save_champ, enrichment] >> model_b
     [model_a, model_b] >> benchmark >> gate >> promotion >> health
+    gate >> selected_engine
+    redshift_access >> redshift_ml
     health >> inference >> clean
     health >> comparison >> clean
     health >> sim_search >> clean

@@ -21,10 +21,20 @@ validate_benchmark_gate       <-- checks F1, precision, recall, AUC against thre
         |
   PASS? / FAIL?
    |         |
-PASS        FAIL --> inference and comparison are SKIPPED, warning logged
+PASS        FAIL --> check TensorFlow NN benchmark
+   |                    |
+   |              NN PASS → TensorFlow NN
+   |                    |
+   |              NN FAIL/unavailable → Ollama
+   |                    |
+   |              Ollama unavailable → inference skipped
    |
 check_system_health
         |
+select_inference_engine
+   |
+GMDH → TensorFlow NN → Ollama
+   |
    +----+----+
    |         |
 run_fraud  compare_engines
@@ -64,7 +74,9 @@ BENCHMARK_THRESHOLDS = {
 }
 ```
 
-If any metric falls below its threshold, `validate_benchmark_gate` returns `"FAIL"` and logs a warning. Downstream inference tasks check this result and skip execution.
+If any metric falls below its threshold, `validate_benchmark_gate` returns `"FAIL"` and logs a warning. The DAG then checks the TensorFlow NN benchmark, falls back to Ollama if needed, and skips inference only when no engine is available.
+
+Redshift ML is not part of model promotion. When configured, it is used only as an optional final signal alongside the selected inference engine. Matching decisions keep `BLOCK` or `ALLOW`; disagreement produces `REVIEW`. Missing or invalid AWS credentials skip the Redshift tasks.
 
 ---
 
@@ -126,5 +138,5 @@ BENCHMARK GATE: PASS — model quality meets all thresholds. Inference ENABLED.
 If any metric fails:
 ```
 BENCHMARK GATE: FAIL — one or more metrics are below threshold.
-Fraud inference will be SKIPPED to prevent deploying a degraded model.
+Trying the TensorFlow NN fallback before Ollama.
 ```
