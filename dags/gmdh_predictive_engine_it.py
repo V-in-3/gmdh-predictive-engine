@@ -11,7 +11,7 @@ from airflow.utils.dates import days_ago
 
 def get_config_path():
     return Variable.get("gmdh_config_path",
-                        default_var="gmdh_secrets.json")
+                        default_var="/opt/airflow/project/gmdh_secrets.json")
 
 
 CONFIG_PATH = get_config_path()
@@ -217,7 +217,8 @@ with DAG(
         'gmdh_predictive_engine_it',
         default_args={'owner': 'airflow-spark-dev', 'start_date': days_ago(1)},
         schedule_interval=None,
-        catchup=False
+        catchup=False,
+        is_paused_upon_creation=True
 ) as dag:
     t1 = PythonOperator(
         task_id='prepare_scripts',

@@ -1,10 +1,10 @@
 {
   "description": "gmdh_trained_fraud_model",
-  "source": "c:\\Users\\User\\Documents\\gmdh-predictive-engine\\data\\fraud_model_coeffs.json",
-  "beta0": -0.009689705844712562,
+  "source": "/opt/airflow/project/data/fraud_model_coeffs.json",
+  "beta0": -0.0318231569362933,
   "betas": [
-    0.8216057667849549,
-    0.6615707085936392,
-    -0.4264171385403655
+    0.4637858585814294,
+    0.3271522987531072,
+    0.6150055284601372
   ]
 }

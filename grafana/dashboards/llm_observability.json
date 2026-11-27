@@ -1,0 +1,123 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "LLM Calls (last 24h)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT COUNT(*) FROM llm_call_log WHERE called_at > NOW() - INTERVAL '24 hours'",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {"thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 500}]}}
+      }
+    },
+    {
+      "title": "Error Rate (%)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT ROUND(100.0 * SUM(CASE WHEN NOT success THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) FROM llm_call_log WHERE called_at > NOW() - INTERVAL '24 hours'",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {"unit": "percent", "thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "orange", "value": 5}, {"color": "red", "value": 20}]}}
+      }
+    },
+    {
+      "title": "Avg Latency (ms, 24h)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT ROUND(AVG(latency_ms)) FROM llm_call_log WHERE called_at > NOW() - INTERVAL '24 hours' AND success",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {"unit": "ms", "thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "orange", "value": 2000}, {"color": "red", "value": 8000}]}}
+      }
+    },
+    {
+      "title": "Estimated Cost (24h, $)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT ROUND(SUM(estimated_cost_usd)::numeric, 4) FROM llm_call_log WHERE called_at > NOW() - INTERVAL '24 hours'",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {"unit": "currencyUSD", "thresholds": {"steps": [{"color": "blue", "value": 0}]}}
+      }
+    },
+    {
+      "title": "Latency Over Time (p50 / p95)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 4},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT date_trunc('hour', called_at) AS time, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY latency_ms) AS p50_ms, PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_ms FROM llm_call_log WHERE success GROUP BY 1 ORDER BY 1",
+        "format": "time_series"
+      }],
+      "fieldConfig": {
+        "defaults": {"unit": "ms", "custom": {"lineWidth": 2, "pointSize": 5}}
+      }
+    },
+    {
+      "title": "Calls by Preliminary Decision (pie)",
+      "type": "piechart",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 12},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT COALESCE(preliminary_decision, 'unknown') AS label, COUNT(*) AS count FROM llm_call_log GROUP BY 1",
+        "format": "table"
+      }],
+      "options": {
+        "reduceOptions": {"values": true, "calcs": ["lastNotNull"], "fields": ""},
+        "pieType": "pie",
+        "displayLabels": ["name", "percent"],
+        "legend": {"displayMode": "list", "placement": "right", "values": ["value"]}
+      }
+    },
+    {
+      "title": "Calls by Backend / Model (pie)",
+      "type": "piechart",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 12},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT backend || ' / ' || model_used AS label, COUNT(*) AS count FROM llm_call_log GROUP BY 1",
+        "format": "table"
+      }],
+      "options": {
+        "reduceOptions": {"values": true, "calcs": ["lastNotNull"], "fields": ""},
+        "pieType": "pie",
+        "displayLabels": ["name", "percent"],
+        "legend": {"displayMode": "list", "placement": "right", "values": ["value"]}
+      }
+    },
+    {
+      "title": "Recent Calls (table)",
+      "type": "table",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 12},
+      "datasource": "PostgreSQL",
+      "targets": [{
+        "rawSql": "SELECT called_at, agent_node, model_used, latency_ms, success, error FROM llm_call_log ORDER BY called_at DESC LIMIT 20",
+        "format": "table"
+      }]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["llm", "observability", "agent"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "title": "LLM Agent Observability",
+  "uid": "llm-agent-observability"
+}
