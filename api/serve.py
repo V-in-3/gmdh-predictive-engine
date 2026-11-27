@@ -24,14 +24,7 @@ from pydantic import BaseModel, Field
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agents.fraud_investigation_agent import (
-    score_transaction,
-    search_similar,
-    route_after_scoring,
-    route_after_similarity,
-    llm_reason,
-    make_decision,
-)
+from jobs.risk_entrypoint import run_risk_assessment
 
 app = FastAPI(
     title="Fraud Detection API",
@@ -43,10 +36,18 @@ app = FastAPI(
 # === Request / Response models ===
 
 class TransactionRequest(BaseModel):
+    account_id: Optional[str] = Field(None, description="Account identifier")
+    device_id: Optional[str] = Field(None, description="Device identifier")
+    ip_address: Optional[str] = Field(None, description="IP address")
+    trial_id: Optional[str] = Field(None, description="Trial identifier")
     semantic_risk: float = Field(..., ge=0, le=1, description="NLP-derived risk score")
     velocity_1h: float = Field(..., ge=0, description="Transactions per hour")
     proxy_score: float = Field(..., ge=0, le=1, description="VPN/proxy detection score")
     amount_deviation: float = Field(..., ge=0, description="Deviation from user mean spend")
+    linked_accounts: int = Field(0, ge=0, description="Other accounts linked by graph signals")
+    shared_devices: int = Field(0, ge=0, description="Shared devices in the account graph")
+    shared_ips: int = Field(0, ge=0, description="Shared IP addresses in the account graph")
+    trial_count_24h: int = Field(0, ge=0, description="Trials started by the linked group in 24 hours")
     transaction_id: Optional[str] = Field(None, description="Optional transaction ID")
 
 
@@ -56,6 +57,8 @@ class ScoringResult(BaseModel):
     confidence: float
     nn_score: float
     gmdh_score: float
+    graph_risk: float
+    graph_reasons: list
     route: str
     similarity_verdict: str
     similar_cases: list
@@ -74,72 +77,43 @@ class HealthResponse(BaseModel):
 @app.post("/score", response_model=ScoringResult)
 def score_transaction_endpoint(tx: TransactionRequest):
     """Score a single transaction through the full agent pipeline."""
-    start = time.time()
-
-    state = {
-        "transaction": {
+    transaction = {
+            "account_id": tx.account_id,
+            "device_id": tx.device_id,
+            "ip_address": tx.ip_address,
+            "trial_id": tx.trial_id,
             "semantic_risk": tx.semantic_risk,
             "velocity_1h": tx.velocity_1h,
             "proxy_score": tx.proxy_score,
             "amount_deviation": tx.amount_deviation,
-        },
-        "transaction_id": tx.transaction_id or f"api-{int(time.time())}",
-        "nn_score": 0.0,
-        "gmdh_score": 0.0,
-        "decision_threshold": 0.75,
-        "similar_cases": [],
-        "similarity_verdict": "",
-        "similarity_confidence": 0.0,
-        "llm_explanation": "",
-        "final_decision": "",
-        "reasoning": "",
-        "confidence": 0.0,
+            "linked_accounts": tx.linked_accounts,
+            "shared_devices": tx.shared_devices,
+            "shared_ips": tx.shared_ips,
+            "trial_count_24h": tx.trial_count_24h,
     }
-
-    # Step 1 — Score
-    scored = score_transaction(state)
-    state.update(scored)
-
-    # Step 2 — Route
-    route = route_after_scoring(state)
-
-    if route == "investigate":
-        # Step 3 — pgvector
-        similar = search_similar(state)
-        state.update(similar)
-
-        # Step 4 — Route after similarity
-        route2 = route_after_similarity(state)
-
-        if route2 == "llm_reason":
-            # Step 5 — LLM
-            llm = llm_reason(state)
-            state.update(llm)
-
-    # Final decision
-    decision = make_decision(state)
-    state.update(decision)
-
-    latency = (time.time() - start) * 1000
+    transaction_id = tx.transaction_id or f"api-{int(time.time())}"
+    result = run_risk_assessment(transaction, transaction_id)
 
     return ScoringResult(
-        transaction_id=state["transaction_id"],
-        decision=state["final_decision"],
-        confidence=state["confidence"],
-        nn_score=state["nn_score"],
-        gmdh_score=state["gmdh_score"],
-        route=route,
-        similarity_verdict=state.get("similarity_verdict", "N/A"),
+        transaction_id=result["transaction_id"],
+        decision=result["final_decision"],
+        confidence=result["confidence"],
+        nn_score=result["nn_score"],
+        gmdh_score=result["gmdh_score"],
+        graph_risk=result.get("graph_risk", 0.0),
+        graph_reasons=result.get("graph_reasons", []),
+        route=result.get("route", "unknown"),
+        similarity_verdict=result.get("similarity_verdict", "N/A"),
         similar_cases=[
             {
                 "id": c.get("metadata", {}).get("description", "")[:50],
                 "is_fraud": c.get("metadata", {}).get("is_fraud"),
                 "distance": round(c.get("distance", 0), 4),
             }
-            for c in state.get("similar_cases", [])[:3]
+            for c in result.get("similar_cases", [])[:3]
         ],
-        reasoning=state["reasoning"][:200],
-        latency_ms=round(latency, 1),
+        reasoning=result["reasoning"][:200],
+        latency_ms=result["latency_ms"],
     )
 
 

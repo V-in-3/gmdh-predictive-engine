@@ -116,16 +116,14 @@ services:
     networks:
       - gmdh_net
 
-  airflow:
+  airflow-init:
     build: .
-    container_name: gmdh-airflow
-    ports:
-      - "8080:8080"
-      - "8000:8000"
+    container_name: gmdh-airflow-init
+    restart: "no"
     volumes:
       - .:/opt/airflow/project
       - ./dags:/opt/airflow/dags
-    environment:
+    environment: &airflow-env
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow_user:airflow_pass@gmdh-postgres:5432/airflow_db
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
@@ -136,10 +134,12 @@ services:
       - KINESIS_ENDPOINT=http://gmdh-localstack:4566
       - REGION=us-east-1
       - PYTHONPATH=/opt/airflow/project
-      - _AIRFLOW_WWW_USER_USERNAME=admin
-      - _AIRFLOW_WWW_USER_PASSWORD=admin
       - OLLAMA_MODEL=${OLLAMA_MODEL:-tinyllama}
+      - LLM_BACKEND=${LLM_BACKEND:-ollama}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-120b}
       - SKIP_GATES=${SKIP_GATES:-false}
+      - DEMO_MODE=${DEMO_MODE:-true}
       - POSTGRES_HOST=gmdh-postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=airflow_db
@@ -147,45 +147,13 @@ services:
       - POSTGRES_PASSWORD=airflow_pass
     command: >-
       bash -c "
-      pip install --quiet pgvector psycopg2-binary numpy 2>/dev/null;
-      airflow standalone &
-      sleep 30 &&
-      airflow users reset-password --username admin --password admin 2>/dev/null;
-      airflow connections delete postgres_default 2>/dev/null;
-      airflow connections add postgres_default --conn-type postgres --conn-host gmdh-postgres --conn-port 5432 --conn-login airflow_user --conn-password airflow_pass --conn-schema airflow_db 2>/dev/null;
-      python -c \"
-      import psycopg2
-      conn = psycopg2.connect(host='gmdh-postgres', user='airflow_user', password='airflow_pass', dbname='airflow_db')
-      cur = conn.cursor()
-      cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
-      cur.execute('''CREATE TABLE IF NOT EXISTS raw_subscriptions (
-          id SERIAL PRIMARY KEY,
-          kafka_offset BIGINT UNIQUE,
-          payload JSONB,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )''')
-      cur.execute('''CREATE TABLE IF NOT EXISTS subscriptions_dlq (
-          id SERIAL PRIMARY KEY,
-          kafka_offset BIGINT UNIQUE,
-          payload JSONB,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )''')
-      cur.execute('''CREATE TABLE IF NOT EXISTS transaction_embeddings (
-          id SERIAL PRIMARY KEY,
-          transaction_id TEXT UNIQUE,
-          embedding vector(32),
-          fraud_score FLOAT,
-          is_fraud BOOLEAN,
-          metadata JSONB,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )''')
-      cur.execute('''CREATE INDEX IF NOT EXISTS idx_embeddings_ivfflat
-          ON transaction_embeddings USING ivfflat (embedding vector_cosine_ops)
-          WITH (lists = 100)''')
-      conn.commit()
-      print('PostgreSQL tables + pgvector ready')
-      \" 2>/dev/null;
-      wait
+      pip install --quiet langgraph langchain-core groq &&
+      airflow db migrate &&
+      airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com;
+      airflow connections delete postgres_default;
+      airflow connections add postgres_default --conn-type postgres --conn-host gmdh-postgres --conn-port 5432 --conn-login airflow_user --conn-password airflow_pass --conn-schema airflow_db &&
+      python /opt/airflow/project/scripts/init_pgvector_tables.py &&
+      python /opt/airflow/project/scripts/load_seed_cases.py
       "
     depends_on:
       postgres:
@@ -194,11 +162,52 @@ services:
         condition: service_healthy
       localstack:
         condition: service_healthy
+    networks:
+      - gmdh_net
+
+  airflow-webserver:
+    build: .
+    container_name: gmdh-airflow
+    ports:
+      - "8080:8080"
+      - "8000:8000"
+    volumes:
+      - .:/opt/airflow/project
+      - ./dags:/opt/airflow/dags
+    environment: *airflow-env
+    command: >-
+      bash -c "
+      pip install --quiet langgraph langchain-core groq &&
+      cd /opt/airflow/project && (uvicorn api.serve:app --host 0.0.0.0 --port 8000 > /tmp/api.log 2>&1 &) &&
+      airflow webserver --port 8080
+      "
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 120s
+    networks:
+      - gmdh_net
+
+  airflow-scheduler:
+    build: .
+    container_name: gmdh-airflow-scheduler
+    volumes:
+      - .:/opt/airflow/project
+      - ./dags:/opt/airflow/dags
+    environment: *airflow-env
+    command: >-
+      bash -c "
+      pip install --quiet langgraph langchain-core groq &&
+      airflow scheduler
+      "
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
     networks:
       - gmdh_net
 
@@ -211,6 +220,8 @@ services:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=*
+      - GF_PLUGIN_CATALOG_URL=
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
       - ./grafana/dashboards:/var/lib/grafana/dashboards

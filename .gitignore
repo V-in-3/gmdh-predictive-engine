@@ -38,3 +38,51 @@ data/fraud_production_50k_norm.csv
 data/fraud_transactions_ieee_50k.csv
 data/fraud_transactions_ieee_100k.csv
 data/fraud_transactions_ieee_full.csv
+
+
+# Docker volumes & persistent data
+postgres_data/
+kafka_data/
+ollama_data/
+grafana_data/
+
+# Ollama models cache
+.ollama/
+
+# Localstack
+.localstack/
+
+# Airflow logs from Docker
+logs/
+
+# PostgreSQL & databases
+*.sql
+*.backup
+*.dump
+
+# Kafka offsets & state
+__consumer_offsets/
+
+# API logs
+/tmp/api.log
+
+# Windows temporary
+*.exe
+*.msi
+
+# Temporary documents (keep main docs)
+**/~$*.docx
+**/~$*.doc
+
+# VS Code workspace settings
+.vscode/settings.json
+.vscode/extensions.json
+
+# Python virtual environments
+.venv/
+.venv312/
+venv/
+env/
+
+# Graph analysis test notes
+README_GRAPH_ANALYSIS_TEST.md

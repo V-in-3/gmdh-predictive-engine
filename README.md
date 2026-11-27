@@ -13,7 +13,7 @@ End-to-end fraud detection system combining classical ML (GMDH polynomials), dee
 This is a portfolio project that showcases:
 
 - **MLOps lifecycle** — data generation → training → model persistence → inference → cleanup
-- **Multi-model scoring** — TensorFlow NN (primary, AUC 0.93) + GMDH polynomial (interpretable fallback)
+- **Multi-model scoring** — GMDH primary model with TensorFlow NN and Ollama fallbacks
 - **RAG pipeline** — pgvector retrieval → augmented LLM prompt → case-based reasoning
 - **Agentic AI** — LangGraph state machine with adaptive routing by confidence level
 - **Fine-tuned LLM** — LoRA on Apple Silicon (MLX), deployable to Ollama
@@ -21,7 +21,8 @@ This is a portfolio project that showcases:
 - **Data pipeline engineering** — Kafka ingestion, PostgreSQL sync, DLQ handling, recursive reconciliation
 - **Infrastructure as Code** — fully Dockerized + Helm charts for Kubernetes deployment
 - **Production patterns** — idempotency, dead letter queues, self-healing DAGs, parallel processing
-- **Pluggable architecture** — scoring engine factory with A/B comparison (GMDH vs Ollama vs mock vs NN)
+- **Pluggable architecture** — GMDH → TensorFlow NN → Ollama fallback chain, plus A/B comparison
+- **Redshift ML integration** — optional final signal for BLOCK / ALLOW / REVIEW decisions
 - **Local LLM integration** — Ollama for real semantic analysis without cloud dependencies
 - **Observability** — New Relic APM decorators for Airflow task tracing
 - **Connected architecture** — all DAGs are linked into a single feedback-driven ecosystem
@@ -62,7 +63,8 @@ This is a portfolio project that showcases:
 │       │   └─ connects to data integrity layer                       │
 │       │   └─ if system degraded → DISABLE inference (fallback)      │
 │       ▼                                                             │
-│  fraud inference: GMDH / Ollama / mock → BLOCK / ALLOW              │
+│  fraud inference: GMDH → TensorFlow NN → Ollama                     │
+│  Redshift ML: optional final signal → BLOCK / ALLOW / REVIEW        │
 │  compare_engines: A/B scoring across all 3 engines                  │
 │  similarity_search: pgvector cosine NN → case-based explanation     │
 │                                                                     │
@@ -105,15 +107,18 @@ enrich_with_bedrock ──┘                                        │
                       │                                          F1≥0.45, AUC≥0.78)
                       │                                                   │
                       │                                                   ▼
-                      │                                          promote_model
+                      │                                          promote_or_restore
                       │                                                   │
                       │                                                   ▼
                       └────────────────────────────────────→ check_system_health
                                                                           │
                                                            ┌──────────────┼──────────────┐
                                                            ▼              ▼              ▼
-                                                   run_fraud_inference  compare_engines  similarity_search
-                                                   (GMDH polynomial)   (A/B: all 3)    (pgvector cosine NN)
+                                                   select_inference_engine  compare_engines  similarity_search
+                                                     │
+                                                   run_fraud_inference
+                                                   (GMDH → NN → Ollama)
+                                                   + optional Redshift ML signal
                                                            │              │              │
                                                            └──────────────┼──────────────┘
                                                                           ▼
@@ -121,13 +126,27 @@ enrich_with_bedrock ──┘                                        │
 ```
 
 **Scoring pipeline (per transaction):**
-- **Primary:** TensorFlow NN (if .keras available) → Precision 0.80, Recall 0.59, AUC 0.93
-- **Fallback:** GMDH polynomial (always available) → AUC 0.75, microsecond inference
+- **Primary:** GMDH polynomial trained nightly and promoted after the benchmark gate
+- **Fallback 1:** TensorFlow NN if GMDH fails the gate and the NN benchmark passes
+- **Fallback 2:** Ollama if GMDH and TensorFlow NN are unavailable
+- **Final signal:** optional Redshift ML score; unavailable Redshift falls back to the selected engine
 - **Similarity:** pgvector cosine search → case-based explanation + drift detection
 - **Real-time agent:** LangGraph (standalone) → adaptive routing based on confidence
 
 Model A and Model B train **in parallel**. Model B produces `health_score`.
-If `health_score < 0.45` then Model A inference is **disabled** (fallback mode).
+If `health_score < 0.35` then Model A inference is **disabled** (fallback mode).
+
+### Nightly model selection
+
+```text
+GMDH PASS → GMDH
+GMDH FAIL → TensorFlow NN if its benchmark passes
+NN unavailable or fails → Ollama
+No fallback available → inference skipped
+```
+
+Redshift ML is not promoted as the primary model. It is an optional final signal:
+both models BLOCK → BLOCK, both ALLOW → ALLOW, disagreement → REVIEW.
 
 ### Feedback Loop
 
@@ -207,7 +226,7 @@ The system runs **two GMDH models** trained with the same algorithm on different
 │   Action: Block/Allow    │   Action: Scale/Alert        │
 ├──────────────────────────┴──────────────────────────────┤
 │                    FALLBACK LOGIC                       │
-│   If Model B health < 0.45 → disable Model A inference  │
+│   If Model B health < 0.35 → disable Model A inference  │
 │   (degraded system = unreliable fraud predictions)      │
 └─────────────────────────────────────────────────────────┘
 ```

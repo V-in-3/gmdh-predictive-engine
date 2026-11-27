@@ -15,7 +15,10 @@ Usage:
 """
 import os
 import json
+import time
 from typing import TypedDict, Literal
+
+from shared.llm_observability import log_llm_call
 
 # LangGraph imports
 try:
@@ -39,6 +42,10 @@ class FraudState(TypedDict):
     nn_score: float
     gmdh_score: float
     decision_threshold: float
+
+    # Graph evidence
+    graph_risk: float
+    graph_reasons: list
 
     # Similarity search
     similar_cases: list
@@ -92,6 +99,17 @@ def score_transaction(state: FraudState) -> dict:
         "nn_score": nn_score,
         "gmdh_score": gmdh_score,
         "decision_threshold": 0.75,
+    }
+
+
+def analyze_graph(state: FraudState) -> dict:
+    """Node 2: calculate account and subscription relationship risk."""
+    from jobs.graph_analysis import analyze_account_graph
+
+    result = analyze_account_graph(state["transaction"])
+    return {
+        "graph_risk": result["graph_risk"],
+        "graph_reasons": result["graph_reasons"],
     }
 
 
@@ -153,12 +171,29 @@ def search_similar(state: FraudState) -> dict:
         }
 
 
+def _preliminary_decision(nn_score: float, similarity_verdict: str, graph_risk: float) -> str:
+    """Compute the likely decision so the LLM explains it (not invents its own)."""
+    if graph_risk >= 0.70 and nn_score <= 0.75:
+        return "REVIEW"
+    if nn_score > 0.75:
+        return "BLOCK"
+    if nn_score > 0.4 and similarity_verdict in ("CONFIRMED_FRAUD", "LIKELY_FRAUD"):
+        return "BLOCK"
+    if nn_score < 0.3:
+        return "ALLOW"
+    return "REVIEW"
+
+
 def llm_reason(state: FraudState) -> dict:
-    """Node 3: Ask LLM to reason about the transaction (RAG-augmented)."""
+    """Node 3: Ask LLM to EXPLAIN the decision (not invent one)."""
     tx = state["transaction"]
     nn_score = state["nn_score"]
-    gmdh_score = state["gmdh_score"]
     similar = state["similar_cases"]
+    graph_risk = state.get("graph_risk", 0.0)
+    graph_reasons = state.get("graph_reasons", [])
+    similarity_verdict = state.get("similarity_verdict", "")
+
+    prelim = _preliminary_decision(nn_score, similarity_verdict, graph_risk)
 
     # Build RAG context from retrieved cases
     rag_context = ""
@@ -185,38 +220,58 @@ CURRENT TRANSACTION:
 - Proxy score: {tx.get('proxy_score', 'N/A')}
 - Amount deviation from user mean: {tx.get('amount_deviation', 'N/A')}
 
-MODEL SCORES:
-- Neural Network: {nn_score:.3f} (threshold: 0.75)
-- GMDH polynomial: {gmdh_score:.3f}
+MODEL SCORE:
+- Neural Network fraud probability: {nn_score:.3f} (threshold: 0.75, so this is {'HIGH' if nn_score > 0.75 else 'LOW' if nn_score < 0.3 else 'MODERATE'})
+
+The system has already decided: {prelim}. Your job is to EXPLAIN this decision, not change it.
+
+SIGNAL A — BEHAVIORAL SIMILARITY (transaction vs known cases):
 {rag_context}
-Based on the transaction data and similar historical cases, provide:
-1. Your assessment (BLOCK/ALLOW/REVIEW)
-2. Which historical cases support your decision (if any)
-3. Brief reasoning (2-3 sentences)
+
+SIGNAL B — NETWORK / FRAUD-RING (account connections):
+- Graph risk: {graph_risk:.3f} {'(HIGH — fraud ring)' if graph_risk >= 0.7 else '(LOW — no ring)' if graph_risk < 0.3 else '(MODERATE)'}
+- {', '.join(graph_reasons) if graph_reasons else 'No linked-account risk detected'}
+
+Write a 2-3 sentence analyst note that JUSTIFIES the {prelim} decision.
+- If ALLOW: explain why the signals are benign (low NN score, no fraud ring, similar to legit cases).
+- If BLOCK: explain which signals triggered it (high NN score and/or fraud ring and/or fraud-similar cases).
+- If REVIEW: explain what is ambiguous.
+Be consistent with the {prelim} decision and the actual numbers above. Do NOT contradict them.
 """
 
-    # Try Ollama (local LLM)
+    # LLM_BACKEND env var picks ollama (local, default) or groq (cloud)
+    from shared.llm_backends import build_backend, estimate_cost_usd
+
+    call_started = time.monotonic()
+    backend = None
     try:
-        import urllib.request
-        ollama_url = os.environ.get("OLLAMA_URL", "http://gmdh-ollama:11434")
-        payload = json.dumps({
-            "model": os.environ.get("OLLAMA_MODEL", "tinyllama"),
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": 0.1}
-        }).encode()
+        backend = build_backend()
+        llm_response, usage = backend.complete(prompt)
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
 
-        req = urllib.request.Request(
-            f"{ollama_url}/api/generate",
-            data=payload,
-            headers={"Content-Type": "application/json"}
+        log_llm_call(
+            agent_node="llm_reason", model=backend.model, backend=backend.name,
+            latency_ms=int((time.monotonic() - call_started) * 1000),
+            transaction_id=state.get("transaction_id"),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            estimated_cost_usd=estimate_cost_usd(backend.name, backend.model, prompt_tokens, completion_tokens),
+            preliminary_decision=prelim,
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read().decode())
-            llm_response = result.get("response", "")
-
         return {"llm_explanation": llm_response}
-    except Exception:
+    except Exception as exc:
+        model_used = getattr(backend, "model", os.environ.get("LLM_BACKEND", "ollama"))
+        backend_name = getattr(backend, "name", os.environ.get("LLM_BACKEND", "ollama"))
+        error_text = str(exc)
+        if type(exc).__name__ == "RateLimitError":
+            error_text = f"rate_limited: {error_text}"
+        log_llm_call(
+            agent_node="llm_reason", model=model_used, backend=backend_name,
+            latency_ms=int((time.monotonic() - call_started) * 1000),
+            transaction_id=state.get("transaction_id"),
+            preliminary_decision=prelim, success=False, error=error_text,
+        )
         # Fallback: rule-based explanation with RAG context
         if similar:
             fraud_cases = [c for c in similar if c.get("metadata", {}).get("is_fraud")]
@@ -243,12 +298,18 @@ Based on the transaction data and similar historical cases, provide:
 def make_decision(state: FraudState) -> dict:
     """Node 4: Final decision based on all evidence."""
     nn_score = state["nn_score"]
-    gmdh_score = state["gmdh_score"]
     similarity_verdict = state["similarity_verdict"]
     similarity_confidence = state["similarity_confidence"]
+    graph_risk = state.get("graph_risk", 0.0)
+    graph_reasons = state.get("graph_reasons", [])
 
+    # Graph evidence escalates uncertain cases but cannot block by itself.
+    if graph_risk >= 0.70 and nn_score <= 0.75:
+        decision = "REVIEW"
+        confidence = 0.65
+        reasoning = f"Graph risk {graph_risk:.2f} requires review"
     # Decision logic: combine all signals
-    if nn_score > 0.75 and similarity_verdict == "CONFIRMED_FRAUD":
+    elif nn_score > 0.75 and similarity_verdict == "CONFIRMED_FRAUD":
         decision = "BLOCK"
         confidence = 0.95
         reasoning = f"NN score {nn_score:.2f} + pgvector confirms fraud pattern"
@@ -271,26 +332,41 @@ def make_decision(state: FraudState) -> dict:
     else:
         decision = "REVIEW"
         confidence = 0.50
-        reasoning = f"Uncertain: NN={nn_score:.2f}, GMDH={gmdh_score:.2f}, pgvector={similarity_verdict}"
+        reasoning = f"Uncertain: NN={nn_score:.2f}, pgvector={similarity_verdict}"
 
-    # Add LLM explanation if available
-    llm_note = state.get("llm_explanation", "")
-    if llm_note:
-        reasoning += f" | LLM: {llm_note[:100]}"
+    # Build a full signal summary so every layer is visible (demo-friendly).
+    signals = [f"NN={nn_score:.2f}"]
+    if similarity_verdict:
+        signals.append(f"pgvector={similarity_verdict}")
+    if graph_risk > 0:
+        signals.append(f"graph_risk={graph_risk:.2f}")
+    reasoning = f"[{decision}] " + reasoning + " | Signals: " + ", ".join(signals)
 
+    # Add graph reasons to the short reasoning summary
+    if graph_reasons:
+        reasoning += f" | Graph: {'; '.join(graph_reasons[:2])}"
+
+    # Full LLM explanation is returned separately (not truncated)
     return {
         "final_decision": decision,
         "confidence": confidence,
         "reasoning": reasoning,
+        "llm_explanation": state.get("llm_explanation", ""),
     }
 
 
 # --- Router function ---
 
 def route_after_scoring(state: FraudState) -> Literal["allow", "block", "investigate"]:
-    """Route based on initial score — clear cases skip investigation."""
-    nn_score = state["nn_score"]
+    """Route based on initial score — clear cases skip investigation.
 
+    DEMO_MODE=true forces every transaction through the full pipeline
+    (graph + pgvector + LLM) so all layers are shown, even obvious cases.
+    """
+    if os.environ.get("DEMO_MODE", "false").lower() == "true":
+        return "investigate"
+
+    nn_score = state["nn_score"]
     if nn_score > 0.85:
         return "block"     # Obviously fraud — skip investigation
     elif nn_score < 0.15:
@@ -300,9 +376,15 @@ def route_after_scoring(state: FraudState) -> Literal["allow", "block", "investi
 
 
 def route_after_similarity(state: FraudState) -> Literal["decide", "llm_reason"]:
-    """Route: if pgvector gives clear answer, decide. Otherwise ask LLM."""
-    verdict = state["similarity_verdict"]
+    """Route: if pgvector gives clear answer, decide. Otherwise ask LLM.
 
+    DEMO_MODE=true forces LLM reasoning on every investigated case so the
+    full pipeline (NN + graph + pgvector + LLM) is always shown.
+    """
+    if os.environ.get("DEMO_MODE", "false").lower() == "true":
+        return "llm_reason"
+
+    verdict = state["similarity_verdict"]
     if verdict in ("CONFIRMED_FRAUD", "LIKELY_LEGIT"):
         return "decide"    # pgvector is confident enough
     else:
@@ -322,16 +404,18 @@ def build_fraud_agent() -> "StateGraph":
 
     # Add nodes
     graph.add_node("score", score_transaction)
+    graph.add_node("analyze_graph", analyze_graph)
     graph.add_node("search_similar", search_similar)
     graph.add_node("llm_reason", llm_reason)
     graph.add_node("decide", make_decision)
 
     # Entry point
     graph.set_entry_point("score")
+    graph.add_edge("score", "analyze_graph")
 
     # Conditional routing after scoring
     graph.add_conditional_edges(
-        "score",
+        "analyze_graph",
         route_after_scoring,
         {
             "block": "decide",        # High score → decide immediately
@@ -387,6 +471,8 @@ def investigate_transaction(transaction: dict, transaction_id: str = "unknown") 
         "final_decision": "",
         "reasoning": "",
         "confidence": 0.0,
+        "graph_risk": 0.0,
+        "graph_reasons": [],
     }
 
     result = agent.invoke(initial_state)

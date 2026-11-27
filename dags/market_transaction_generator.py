@@ -79,10 +79,20 @@ def market_transaction_generator():
         for _ in range(num_orders):
             # Shared correlation key for both systems
             shared_order_id = f"305-{random.randint(1000000, 9999999)}"
+            account_number = random.randint(1, 3)
+            account_id = f"account-{account_number:03d}"
+            device_id = f"device-{random.randint(1, 2):02d}"
+            ip_address = random.choice(["203.0.11.3", "198.51.100.8"])
+            trial_id = f"trial-{shared_order_id}" if random.random() < 0.6 else None
 
             # 1. Amazon SP-API scenario (Business context)
             amz_payload = {
                 'order_id': shared_order_id,
+                'account_id': account_id,
+                'device_id': device_id,
+                'ip_address': ip_address,
+                'trial_id': trial_id,
+                'event_type': 'trial_started' if trial_id else 'order_created',
                 'marketplace_id': 'ATVPDKIKX0DER',
                 'order_status': 'Pending',
                 'sku': f"GMDH-PROD-{random.randint(100, 500)}",
@@ -92,6 +102,11 @@ def market_transaction_generator():
             # 2. Cybersource scenario (Financial context)
             cs_payload = {
                 'order_id': shared_order_id,
+                'account_id': account_id,
+                'device_id': device_id,
+                'ip_address': ip_address,
+                'trial_id': trial_id,
+                'event_type': 'payment_authorized',
                 'transaction_id': str(uuid.uuid4()),
                 'decision': random.choice(['ACCEPT', 'REJECT', 'REVIEW']),
                 'amount': round(random.uniform(20.0, 500.0), 2),
@@ -150,9 +165,19 @@ def market_transaction_generator():
         except Exception as e:
             print(f"⚠️ Kafka notification failed: {e}")
 
+    @task
+    def persist_graph_events():
+        """Persist generated account/device/IP/trial relationships in PostgreSQL."""
+        from jobs.graph_event_consumer import consume_graph_events
+
+        processed = consume_graph_events()
+        print(f"📈 Graph Analysis: persisted relationships for {processed} events.")
+        return processed
+
     # Flow definition
     events_json = produce_market_events()
     notify = sync_to_kafka_monitor(events_json)
+    graph_events = persist_graph_events()
     trigger_fraud = TriggerDagRunOperator(
         task_id='trigger_fraud_engine',
         trigger_dag_id='fraud_detection_engine',
@@ -160,7 +185,7 @@ def market_transaction_generator():
         trigger_rule='all_success'
     )
 
-    events_json >> notify >> trigger_fraud
+    events_json >> notify >> graph_events >> trigger_fraud
 
 # Instantiate the DAG
 generator_dag = market_transaction_generator()
